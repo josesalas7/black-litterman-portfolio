@@ -100,6 +100,55 @@ def definir_estrategias(market_caps: pd.Series) -> dict:
     }
 
 
+def verificar_benchmark_neutro(resultados: dict, market_caps: pd.Series) -> None:
+    """Sanity check: BL sem views deve aproximar os pesos de mercado.
+
+    Propriedade fundamental do modelo: sem views, o prior de equilíbrio
+    é o portfólio de mercado. A otimização posterior deve recuperar pesos
+    próximos ao market cap. Correlação < 0.80 indica bug.
+
+    Args:
+        resultados: Dict {nome: ResultadoBacktest}.
+        market_caps: Series com market cap por ativo.
+    """
+    if "BL Neutro" not in resultados:
+        log.warning("'BL Neutro' ausente nos resultados — sanity check pulado.")
+        return
+
+    pesos_neutro = resultados["BL Neutro"].historico_pesos.mean()
+    ativos = pesos_neutro.index.intersection(market_caps.index)
+    if ativos.empty:
+        log.warning("Nenhum ativo em comum para sanity check.")
+        return
+
+    pesos_mc = market_caps[ativos] / market_caps[ativos].sum()
+    pesos_neutro = pesos_neutro[ativos]
+
+    correlacao = pesos_neutro.corr(pesos_mc)
+    mae = (pesos_neutro - pesos_mc).abs().mean()
+
+    log.info("=" * 55)
+    log.info("SANITY CHECK — BL Neutro vs Market Cap")
+    log.info("  Correlacao de pesos: %.4f  (esperado > 0.80)", correlacao)
+    log.info("  MAE medio:           %.4f", mae)
+
+    for ativo in ativos:
+        log.info(
+            "    %-8s  BL Neutro=%.3f  MarketCap=%.3f",
+            ativo, pesos_neutro[ativo], pesos_mc[ativo],
+        )
+
+    if correlacao < 0.80:
+        log.warning(
+            "Correlacao baixa (%.4f) — possivel bug no modelo. "
+            "BL sem views deveria recuperar os pesos de mercado.",
+            correlacao,
+        )
+    else:
+        log.info("Sanity check OK: BL Neutro aproxima pesos de mercado.")
+    log.info("=" * 55)
+
+
 def gerar_plots(resultados: dict, estrategias_bl: list[str]) -> None:
     """Gera e salva todos os plots em DIR_FIGURAS."""
     log.info("Gerando visualizações...")
@@ -169,22 +218,25 @@ def main() -> None:
     log.info("Iniciando execução das estratégias...")
     resultados = backtest.comparar_estrategias(estrategias)
 
-    # 5. Tabela de métricas
+    # 5. Sanity check: BL Neutro deve aproximar pesos de mercado
+    verificar_benchmark_neutro(resultados, market_caps)
+
+    # 6. Tabela de métricas
     df_metricas = tabela_metricas(resultados)
 
     log.info("\n" + "=" * 60)
-    log.info("MÉTRICAS COMPARATIVAS")
+    log.info("METRICAS COMPARATIVAS")
     log.info("=" * 60)
     try:
-        print(df_metricas.to_markdown())
+        log.info("\n%s", df_metricas.to_markdown())
     except ImportError:
-        print(df_metricas.to_string())
+        log.info("\n%s", df_metricas.to_string())
 
-    # 6. Salvar CSV
+    # 7. Salvar CSV
     df_metricas.to_csv(ARQUIVO_METRICAS_BACKTEST)
-    log.info(f"Métricas salvas em: {ARQUIVO_METRICAS_BACKTEST}")
+    log.info("Metricas salvas em: %s", ARQUIVO_METRICAS_BACKTEST)
 
-    # 7. Gerar plots
+    # 8. Gerar plots
     estrategias_bl = ["BL Neutro", "BL + RSI", "BL + Momentum", "BL + RSI + Momentum"]
     gerar_plots(resultados, estrategias_bl)
 

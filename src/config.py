@@ -4,7 +4,6 @@ config.py — Configurações centrais do projeto.
 Centraliza universo de ativos, parâmetros temporais e caminhos.
 Qualquer mudança no escopo do projeto começa aqui.
 """
-import os
 from pathlib import Path
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -33,36 +32,24 @@ UNIVERSO: dict[str, dict] = {
 }
 
 # Listas derivadas — não editar diretamente, alterar UNIVERSO acima
-TICKERS_YAHOO:   dict[str, str] = {t: v["yahoo"]      for t, v in UNIVERSO.items()}
-IDS_COINGECKO:   list[str]      = [v["coingecko"]     for v in UNIVERSO.values()]
-PARES_BINANCE:   list[str]      = [f"{t}/USDT"        for t in UNIVERSO]
-CATEGORIAS:      dict[str, str] = {t: v["categoria"]  for t, v in UNIVERSO.items()}
+TICKERS_YAHOO: dict[str, str] = {t: v["yahoo"]     for t, v in UNIVERSO.items()}
+IDS_COINGECKO: list[str]      = [v["coingecko"]    for v in UNIVERSO.values()]
+CATEGORIAS:    dict[str, str] = {t: v["categoria"] for t, v in UNIVERSO.items()}
 
 # ============================================================
 # PARÂMETROS TEMPORAIS
 # ============================================================
 
-TIMEFRAME = "1d"
 ANOS_HISTORICO = 2
 
 DATA_FIM    = datetime.now()
 DATA_INICIO = DATA_FIM - timedelta(days=365 * ANOS_HISTORICO)
 
 # ============================================================
-# PARÂMETROS DA BINANCE / CCXT (mantido para compatibilidade)
-# ============================================================
-
-EXCHANGE_ID        = "binance"
-BINANCE_API_KEY    = os.getenv("BINANCE_API_KEY", "")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
-LIMITE_POR_REQ     = 1000
-PAUSA_REQ          = 0.2
-
-# ============================================================
 # CAMINHOS DE ARQUIVOS
 # ============================================================
 
-RAIZ     = Path(__file__).resolve().parent.parent
+RAIZ      = Path(__file__).resolve().parent.parent
 DIR_DADOS = RAIZ / "data"
 DIR_DADOS.mkdir(exist_ok=True)
 

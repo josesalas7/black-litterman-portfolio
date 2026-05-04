@@ -22,6 +22,7 @@ from scipy.optimize import minimize
 
 from src.portfolio_utils import (
     calcular_matriz_covariancia,
+    calcular_matriz_covariancia_ledoitwolf,
     estatisticas_portfolio,
     aplicar_pesos,
 )
@@ -45,6 +46,7 @@ class BlackLitterman:
         market_caps: pd.Series,
         risk_aversion: float = 2.5,
         tau: float = 0.05,
+        usar_ledoit_wolf: bool = True,
     ) -> None:
         self._validar_inputs(retornos, market_caps)
 
@@ -63,12 +65,17 @@ class BlackLitterman:
         self.ativos        = list(ativos_comuns)
         self.n             = len(self.ativos)
 
-        # Covariância anualizada — calculada uma vez e reutilizada
-        self.cov = calcular_matriz_covariancia(self.retornos, anualizar=True)
+        # Covariância anualizada — Ledoit-Wolf por padrão (evita matrizes singulares)
+        if usar_ledoit_wolf:
+            self.cov = calcular_matriz_covariancia_ledoitwolf(self.retornos, anualizar=True)
+            estimador = "Ledoit-Wolf"
+        else:
+            self.cov = calcular_matriz_covariancia(self.retornos, anualizar=True)
+            estimador = "amostral"
 
         log.info(
-            f"BlackLitterman inicializado: {self.n} ativos, "
-            f"λ={risk_aversion}, τ={tau}"
+            "BlackLitterman inicializado: %d ativos, λ=%.2f, τ=%.3f, cov=%s",
+            self.n, risk_aversion, tau, estimador,
         )
 
     # ────────────────────────────────────────────────────────

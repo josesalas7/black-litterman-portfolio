@@ -18,14 +18,14 @@ from src.config import (
     ARQUIVO_RETORNOS,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
 
 def coletar_todos_pares() -> pd.DataFrame:
+    """Baixa preços de fechamento diários para todos os ativos do universo."""
     tickers_str = " ".join(TICKERS_YAHOO.values())
 
-    log.info(f"Baixando {len(TICKERS_YAHOO)} ativos do Yahoo Finance...")
+    log.info("Baixando %d ativos do Yahoo Finance...", len(TICKERS_YAHOO))
     raw = yf.download(
         tickers=tickers_str,
         start=DATA_INICIO.date(),
@@ -50,23 +50,24 @@ def coletar_todos_pares() -> pd.DataFrame:
     close = close.dropna(axis=1, how="all")
     ausentes = antes - set(close.columns)
     if ausentes:
-        log.warning(f"⚠️  Sem dados no Yahoo Finance para: {ausentes}")
+        log.warning("Sem dados no Yahoo Finance para: %s", ausentes)
 
     close = close.sort_index()
-    log.info(f"\n✅ Coleta finalizada: {close.shape[0]} dias × {close.shape[1]} ativos")
+    log.info("Coleta finalizada: %d dias x %d ativos", close.shape[0], close.shape[1])
     return close
 
 
 def calcular_retornos(df_precos: pd.DataFrame) -> pd.DataFrame:
+    """Calcula log-retornos diários a partir dos preços de fechamento."""
     retornos = np.log(df_precos / df_precos.shift(1))
     return retornos.dropna(how="all")
 
 
 def main():
     log.info("=" * 60)
-    log.info("INÍCIO DA COLETA DE PREÇOS (Yahoo Finance)")
-    log.info(f"Período: {DATA_INICIO.date()} → {DATA_FIM.date()}")
-    log.info(f"Ativos: {len(TICKERS_YAHOO)}")
+    log.info("INICIO DA COLETA DE PRECOS (Yahoo Finance)")
+    log.info("Periodo: %s -> %s", DATA_INICIO.date(), DATA_FIM.date())
+    log.info("Ativos: %d", len(TICKERS_YAHOO))
     log.info("=" * 60)
 
     df_precos = coletar_todos_pares()
@@ -79,12 +80,11 @@ def main():
     df_precos.to_parquet(ARQUIVO_PRECOS)
     df_retornos.to_parquet(ARQUIVO_RETORNOS)
 
-    log.info(f"💾 Preços salvos em: {ARQUIVO_PRECOS}")
-    log.info(f"💾 Retornos salvos em: {ARQUIVO_RETORNOS}")
-
-    log.info("\n📊 Preview dos preços (últimos 5 dias):")
-    print(df_precos.tail())
+    log.info("Precos salvos em: %s", ARQUIVO_PRECOS)
+    log.info("Retornos salvos em: %s", ARQUIVO_RETORNOS)
+    log.info("Preview dos precos (ultimos 5 dias):\n%s", df_precos.tail().to_string())
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     main()

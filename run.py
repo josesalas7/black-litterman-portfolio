@@ -1,64 +1,56 @@
 """
-run.py — Ponto de entrada único do projeto.
+run.py — Ponto de entrada para coleta e validação de dados.
 
-Roda a pipeline completa:
-  1. Coleta de preços (Binance)
+Pipeline:
+  1. Coleta de precos historicos (Yahoo Finance)
   2. Coleta de market cap (CoinGecko)
-  3. Validação de qualidade dos dados
+  3. Validacao de qualidade dos dados
 """
+import logging
 import sys
 from pathlib import Path
 
-# Garante que 'src' seja encontrado independente de onde o script é chamado
 PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# ─────────────────────────────────────────────
-# Imports dos módulos do projeto
-# ─────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+log = logging.getLogger(__name__)
+
 from src.fetch_prices import main as fetch_prices
 from src.fetch_market_cap import main as fetch_market_cap
 from src.data_quality import main as data_quality
 
 
-SEPARATOR = "\n" + "=" * 60 + "\n"
-
-
 def main():
-    print(SEPARATOR)
-    print("  PIPELINE BLACK-LITTERMAN CRYPTO")
-    print(SEPARATOR)
+    log.info("=" * 60)
+    log.info("PIPELINE BLACK-LITTERMAN CRYPTO")
+    log.info("=" * 60)
 
-    # ── Etapa 1: Preços ──────────────────────────────────────
-    print("\n[1/3] COLETANDO PRECOS HISTORICOS (Binance)...\n")
+    log.info("[1/3] Coletando precos historicos (Yahoo Finance)...")
     try:
         fetch_prices()
-        print("\n✅  Preços coletados com sucesso.")
+        log.info("[1/3] Precos coletados com sucesso.")
     except Exception as e:
-        print(f"\n❌  Erro na coleta de preços: {e}")
+        log.error("[1/3] Erro na coleta de precos: %s", e)
 
-    # ── Etapa 2: Market Cap ──────────────────────────────────
-    print(SEPARATOR)
-    print("[2/3] COLETANDO MARKET CAP (CoinGecko)...\n")
+    log.info("[2/3] Coletando market cap (CoinGecko)...")
     try:
         fetch_market_cap()
-        print("\n✅  Market cap coletado com sucesso.")
+        log.info("[2/3] Market cap coletado com sucesso.")
     except Exception as e:
-        print(f"\n❌  Erro na coleta de market cap: {e}")
+        log.error("[2/3] Erro na coleta de market cap: %s", e)
 
-    # ── Etapa 3: Qualidade ───────────────────────────────────
-    print(SEPARATOR)
-    print("[3/3] VALIDANDO QUALIDADE DOS DADOS...\n")
+    log.info("[3/3] Validando qualidade dos dados...")
     try:
         data_quality()
-        print("\n✅  Validação concluída.")
+        log.info("[3/3] Validacao concluida.")
     except Exception as e:
-        print(f"\n❌  Erro na validação: {e}")
+        log.error("[3/3] Erro na validacao: %s", e)
 
-    print(SEPARATOR)
-    print("  PIPELINE CONCLUÍDA")
-    print(SEPARATOR)
+    log.info("=" * 60)
+    log.info("PIPELINE CONCLUIDA")
+    log.info("=" * 60)
 
 
 if __name__ == "__main__":

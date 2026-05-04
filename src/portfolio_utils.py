@@ -21,7 +21,11 @@ def calcular_matriz_covariancia(
     retornos: pd.DataFrame,
     anualizar: bool = True,
 ) -> pd.DataFrame:
-    """Matriz de covariância dos retornos, opcionalmente anualizada.
+    """Matriz de covariância amostral dos retornos, opcionalmente anualizada.
+
+    Estimador clássico (não regularizado). Pode ser singular quando
+    n_ativos >= n_períodos. Prefira `calcular_matriz_covariancia_ledoitwolf()`
+    para janelas curtas ou universos com muitos ativos.
 
     Args:
         retornos: DataFrame de log-retornos diários (linhas=datas, colunas=ativos).
@@ -41,6 +45,52 @@ def calcular_matriz_covariancia(
     cov = retornos.cov()
     if anualizar:
         cov = cov * DIAS_ANO_CRIPTO
+    log.debug("Covariância amostral calculada (shape=%s)", cov.shape)
+    return cov
+
+
+def calcular_matriz_covariancia_ledoitwolf(
+    retornos: pd.DataFrame,
+    anualizar: bool = True,
+) -> pd.DataFrame:
+    """Estimador Ledoit-Wolf de covariância com regularização automática.
+
+    Resolve o problema de matriz singular (det ≈ 0) que ocorre quando
+    n_ativos >= n_períodos. O shrinkage é calculado analiticamente, sem
+    necessidade de validação cruzada.
+
+    Referência: Ledoit & Wolf (2004). "A well-conditioned estimator for
+    large-dimensional covariance matrices."
+
+    Args:
+        retornos: DataFrame de log-retornos diários (linhas=datas, colunas=ativos).
+        anualizar: Se True, multiplica por DIAS_ANO_CRIPTO.
+
+    Returns:
+        DataFrame n×n de covariâncias regularizadas (matriz positiva definida).
+
+    Raises:
+        ValueError: Se retornos estiver vazio ou contiver apenas NaNs.
+    """
+    from sklearn.covariance import LedoitWolf
+
+    if retornos.empty:
+        raise ValueError("retornos está vazio.")
+    if retornos.isnull().all().all():
+        raise ValueError("retornos contém apenas valores nulos.")
+
+    dados = retornos.dropna()
+    lw = LedoitWolf().fit(dados.values)
+
+    cov = pd.DataFrame(lw.covariance_, index=retornos.columns, columns=retornos.columns)
+    if anualizar:
+        cov = cov * DIAS_ANO_CRIPTO
+
+    log.debug(
+        "Ledoit-Wolf calculado: shrinkage=%.4f, shape=%s",
+        lw.shrinkage_,
+        cov.shape,
+    )
     return cov
 
 

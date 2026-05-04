@@ -26,7 +26,10 @@ import scipy.linalg
 from scipy.optimize import minimize
 
 from src.black_litterman import BlackLitterman
-from src.portfolio_utils import calcular_matriz_covariancia, DIAS_ANO_CRIPTO
+from src.portfolio_utils import (
+    calcular_matriz_covariancia_ledoitwolf,
+    DIAS_ANO_CRIPTO,
+)
 from src.views import gerar_views_rsi, gerar_views_momentum
 
 log = logging.getLogger(__name__)
@@ -146,7 +149,7 @@ class MarkowitzPuro(EstrategiaBase):
         precos_treino: pd.DataFrame,
     ) -> pd.Series:
         mu    = retornos_treino.mean() * DIAS_ANO_CRIPTO
-        cov   = calcular_matriz_covariancia(retornos_treino).values
+        cov   = calcular_matriz_covariancia_ledoitwolf(retornos_treino).values
         n     = len(mu)
         lam   = self.risk_aversion
 

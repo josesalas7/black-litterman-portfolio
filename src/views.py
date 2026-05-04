@@ -7,18 +7,63 @@ entre grupos de ativos. Aqui elas são derivadas de indicadores técnicos
 
 Estrutura de saída (tripla de Theil-Mixed):
     P: matriz k×n  — quais ativos cada view afeta e com qual peso
-    Q: vetor k     — retorno esperado de cada view (em termos anuais)
+    Q: vetor k     — retorno esperado de cada view
     Omega: matriz k×k diagonal — incerteza de cada view (variância)
 
 onde k = número de views ativas e n = número de ativos.
+
+ESCALA TEMPORAL DAS VIEWS
+--------------------------
+O modelo usa Σ anualizada (× DIAS_ANO_CRIPTO = 365) e, portanto,
+Π = λΣw também está em escala anual. Para consistência, Q deve
+estar em escala anual (ex: Q = 0.05 → view de +5% ao ano).
+
+Se você tiver views em retorno diário, converta com:
+    r_anual = (1 + r_diario) ** DIAS_ANO_CRIPTO - 1
+
+Se você tiver views em retorno anual e quiser verificar a escala diária:
+    r_diario = (1 + r_anual) ** (1 / DIAS_ANO_CRIPTO) - 1
+
+Use `view_anual_para_diaria()` e `view_diaria_para_anual()` abaixo.
 """
 import logging
 import numpy as np
 import pandas as pd
 
-from src.portfolio_utils import calcular_matriz_covariancia, DIAS_ANO_CRIPTO
+from src.portfolio_utils import calcular_matriz_covariancia_ledoitwolf, DIAS_ANO_CRIPTO
 
 log = logging.getLogger(__name__)
+
+
+# ────────────────────────────────────────────────────────────
+# Conversores de escala temporal
+# ────────────────────────────────────────────────────────────
+
+def view_anual_para_diaria(r_anual: float) -> float:
+    """Converte retorno anual de uma view para escala diária (cripto: 365 dias).
+
+    Útil para inspecionar a magnitude da view na mesma escala dos retornos brutos.
+    NÃO use para passar ao modelo — o modelo espera escala anual.
+
+    Args:
+        r_anual: Retorno anual da view (ex: 0.05 = 5% a.a.).
+
+    Returns:
+        Retorno diário equivalente.
+    """
+    return (1 + r_anual) ** (1 / DIAS_ANO_CRIPTO) - 1
+
+
+def view_diaria_para_anual(r_diario: float) -> float:
+    """Converte retorno diário de uma view para escala anual (cripto: 365 dias).
+
+    Args:
+        r_diario: Retorno diário da view.
+
+    Returns:
+        Retorno anual equivalente.
+    """
+    return (1 + r_diario) ** DIAS_ANO_CRIPTO - 1
 
 
 # ────────────────────────────────────────────────────────────
@@ -98,7 +143,9 @@ def gerar_views_rsi(
         data_referencia: Data para calcular o RSI.
         threshold_compra: RSI abaixo deste valor gera view positiva.
         threshold_venda: RSI acima deste valor gera view negativa.
-        retorno_esperado_view: Magnitude da view em retorno anual (ex: 0.05 = 5%).
+        retorno_esperado_view: Magnitude da view em retorno ANUAL (ex: 0.05 = 5% a.a.).
+            Deve estar na mesma escala que Π (anualizado). Veja nota de escala
+            temporal no cabeçalho do módulo.
         tau: Parâmetro de escala (usado na heurística de Omega).
 
     Returns:
@@ -150,7 +197,7 @@ def gerar_views_rsi(
     Q = np.array(Q_vals)
 
     retornos_temp = np.log(precos / precos.shift(1)).dropna()
-    cov_anual = calcular_matriz_covariancia(retornos_temp).values
+    cov_anual = calcular_matriz_covariancia_ledoitwolf(retornos_temp).values
     Omega = _calcular_omega_idzorek(P, cov_anual, tau)
 
     log.info(f"{len(Q_vals)} view(s) RSI gerada(s) para {data_referencia.date()}")
@@ -176,8 +223,10 @@ def gerar_views_momentum(
         data_referencia: Data de referência para calcular momentum.
         top_n: Número de ativos com maior momentum (lado long da view).
         bottom_n: Número de ativos com menor momentum (lado short da view).
-        spread_esperado: Excesso de retorno anual esperado do spread (ex: 0.10 = 10%).
-        periodo_momentum: Janela de momentum em dias.
+        spread_esperado: Excesso de retorno ANUAL esperado do spread (ex: 0.10 = 10% a.a.).
+            Deve estar na mesma escala que Π (anualizado). O momentum de N dias é
+            usado apenas para ranking, não como magnitude da view.
+        periodo_momentum: Janela de momentum em dias (só para ranking).
         tau: Parâmetro de escala para Omega.
 
     Returns:
@@ -214,7 +263,7 @@ def gerar_views_momentum(
     Q = np.array([spread_esperado])
 
     retornos_temp = np.log(precos / precos.shift(1)).dropna()
-    cov_anual = calcular_matriz_covariancia(retornos_temp).values
+    cov_anual = calcular_matriz_covariancia_ledoitwolf(retornos_temp).values
     Omega = _calcular_omega_idzorek(P, cov_anual, tau)
 
     return P, Q, Omega
