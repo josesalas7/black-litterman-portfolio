@@ -235,7 +235,8 @@ class WalkForwardBacktest:
 
         for i, data_t in enumerate(datas_rebal):
             log.info(
-                f"[{estrategia.nome}] Rebal {i + 1}/{n_rebal}: {data_t.date()}"
+                "[%s] Rebalanceamento %d/%d: %s",
+                estrategia.nome, i + 1, n_rebal, data_t.date(),
             )
 
             treino = self.janela_treino(data_t)
@@ -243,7 +244,7 @@ class WalkForwardBacktest:
             # Remove ativos com qualquer NaN na janela de treino
             treino_limpo = treino.dropna(axis=1, how="any")
             if treino_limpo.empty:
-                log.warning(f"Treino vazio em {data_t.date()} — pulando.")
+                log.warning("Treino vazio em %s — pulando.", data_t.date())
                 continue
 
             precos_treino = self.precos[self.precos.index < data_t][treino_limpo.columns]
@@ -253,13 +254,19 @@ class WalkForwardBacktest:
                 pesos = estrategia.calcular_pesos(treino_limpo, precos_treino)
             except Exception as exc:
                 log.warning(
-                    f"[{estrategia.nome}] Falha em {data_t.date()}: {exc}. "
-                    "Usando equal-weight."
+                    "[%s] Falha em %s: %s. Usando equal-weight.",
+                    estrategia.nome, data_t.date(), exc,
                 )
                 n = treino_limpo.shape[1]
                 pesos = pd.Series(1.0 / n, index=treino_limpo.columns)
 
             historico_pesos[data_t] = pesos
+            log.debug(
+                "[%s] Pesos em %s: %s",
+                estrategia.nome,
+                data_t.date(),
+                {k: round(v, 4) for k, v in pesos.sort_values(ascending=False).items()},
+            )
 
             # Retornos realizados no período de holding
             holding = self.janela_holding(data_t)
@@ -269,7 +276,7 @@ class WalkForwardBacktest:
             # Alinha ativos e renormaliza pesos (por segurança)
             ativos = holding.columns.intersection(pesos.index)
             if ativos.empty:
-                log.warning(f"Nenhum ativo em comum entre holding e pesos em {data_t.date()}.")
+                log.warning("Nenhum ativo em comum entre holding e pesos em %s.", data_t.date())
                 continue
 
             p = pesos[ativos]
@@ -308,9 +315,19 @@ class WalkForwardBacktest:
             Dict {nome: ResultadoBacktest}.
         """
         resultados: dict[str, ResultadoBacktest] = {}
-        for nome, est in estrategias.items():
-            log.info(f"{'=' * 50}")
-            log.info(f"Executando estratégia: {nome}")
-            log.info(f"{'=' * 50}")
+        n_total = len(estrategias)
+        for idx, (nome, est) in enumerate(estrategias.items(), start=1):
+            log.info("=" * 55)
+            log.info("Estrategia %d/%d: %s", idx, n_total, nome)
+            log.info("=" * 55)
             resultados[nome] = self.executar_estrategia(est)
+            metricas = resultados[nome].metricas()
+            log.info(
+                "[%s] Concluida — Retorno=%.1f%%, Vol=%.1f%%, Sharpe=%.2f, MDD=%.1f%%",
+                nome,
+                metricas.get("retorno_anualizado_%", float("nan")),
+                metricas.get("volatilidade_%", float("nan")),
+                metricas.get("sharpe", float("nan")),
+                metricas.get("max_drawdown_%", float("nan")),
+            )
         return resultados

@@ -83,7 +83,10 @@ class EqualWeight(EstrategiaBase):
         precos_treino: pd.DataFrame,
     ) -> pd.Series:
         n = retornos_treino.shape[1]
-        return pd.Series(1.0 / n, index=retornos_treino.columns)
+        log.info("[%s] Calculando pesos: 1/%d por ativo.", self.nome, n)
+        pesos = pd.Series(1.0 / n, index=retornos_treino.columns)
+        log.debug("[%s] Pesos: %s", self.nome, dict(pesos.round(4)))
+        return pesos
 
 
 # ────────────────────────────────────────────────────────────
@@ -111,10 +114,13 @@ class MarketCapWeight(EstrategiaBase):
         retornos_treino: pd.DataFrame,
         precos_treino: pd.DataFrame,
     ) -> pd.Series:
+        log.info("[%s] Calculando pesos por market cap...", self.nome)
         mc = self.market_caps.reindex(retornos_treino.columns).dropna()
         if mc.empty:
             raise ValueError("market_caps não tem ativos em comum com retornos_treino.")
-        return mc / mc.sum()
+        pesos = mc / mc.sum()
+        log.debug("[%s] Pesos: %s", self.nome, dict(pesos.round(4)))
+        return pesos
 
 
 # ────────────────────────────────────────────────────────────
@@ -148,10 +154,21 @@ class MarkowitzPuro(EstrategiaBase):
         retornos_treino: pd.DataFrame,
         precos_treino: pd.DataFrame,
     ) -> pd.Series:
-        mu    = retornos_treino.mean() * DIAS_ANO_CRIPTO
-        cov   = calcular_matriz_covariancia_ledoitwolf(retornos_treino).values
-        n     = len(mu)
-        lam   = self.risk_aversion
+        n_obs, n_ativos = retornos_treino.shape
+        log.info(
+            "[%s] Calculando pesos (MV clássico, %d ativos, %d obs, lambda=%.2f)...",
+            self.nome, n_ativos, n_obs, self.risk_aversion,
+        )
+
+        mu  = retornos_treino.mean() * DIAS_ANO_CRIPTO
+        cov = calcular_matriz_covariancia_ledoitwolf(retornos_treino).values
+        n   = len(mu)
+        lam = self.risk_aversion
+
+        log.debug(
+            "[%s] Retornos esperados mu (anualizados): %s",
+            self.nome, dict(mu.round(4)),
+        )
 
         def objetivo(w: np.ndarray) -> float:
             return -(w @ mu.values - (lam / 2) * w @ cov @ w)
@@ -166,12 +183,15 @@ class MarkowitzPuro(EstrategiaBase):
         )
 
         if not resultado.success:
-            log.warning(f"Markowitz: otimização não convergiu — equal-weight usado.")
+            log.warning("[%s] Otimizacao nao convergiu — usando equal-weight.", self.nome)
             return pd.Series(1.0 / n, index=retornos_treino.columns)
 
         pesos = pd.Series(resultado.x, index=retornos_treino.columns)
-        pesos = pesos.clip(lower=0)
-        return pesos / pesos.sum()
+        pesos = pesos.clip(lower=0) / pesos.clip(lower=0).sum()
+
+        log.debug("[%s] Pesos otimos: %s", self.nome, dict(pesos.round(4)))
+        log.info("[%s] Otimizacao concluida em %d iteracoes.", self.nome, resultado.nit)
+        return pesos
 
 
 # ────────────────────────────────────────────────────────────
@@ -210,11 +230,14 @@ class BlackLittermanNeutro(EstrategiaBase):
         retornos_treino: pd.DataFrame,
         precos_treino: pd.DataFrame,
     ) -> pd.Series:
+        log.info("[%s] Calculando pesos (sem views — equilíbrio puro)...", self.nome)
         mc  = self.market_caps.reindex(retornos_treino.columns).dropna()
         ret = retornos_treino[mc.index]
 
-        bl = BlackLitterman(ret, mc, self.risk_aversion, self.tau)
-        return bl.executar(peso_maximo=self.peso_maximo)["pesos_otimos"]
+        bl    = BlackLitterman(ret, mc, self.risk_aversion, self.tau)
+        pesos = bl.executar(peso_maximo=self.peso_maximo)["pesos_otimos"]
+        log.info("[%s] Pesos calculados.", self.nome)
+        return pesos
 
 
 # ────────────────────────────────────────────────────────────
@@ -266,8 +289,9 @@ class BlackLittermanRSI(EstrategiaBase):
         retornos_treino: pd.DataFrame,
         precos_treino: pd.DataFrame,
     ) -> pd.Series:
-        mc  = self.market_caps.reindex(retornos_treino.columns).dropna()
-        ret = retornos_treino[mc.index]
+        log.info("[%s] Calculando pesos com views RSI...", self.nome)
+        mc   = self.market_caps.reindex(retornos_treino.columns).dropna()
+        ret  = retornos_treino[mc.index]
         prec = precos_treino[mc.index]
 
         bl       = BlackLitterman(ret, mc, self.risk_aversion, self.tau)
@@ -282,11 +306,15 @@ class BlackLittermanRSI(EstrategiaBase):
                 retorno_esperado_view=self.retorno_view,
                 tau=self.tau,
             )
-            return bl.executar(P=P, Q=Q, Omega=Omega, peso_maximo=self.peso_maximo)["pesos_otimos"]
+            log.info("[%s] %d view(s) RSI ativa(s) em %s.", self.nome, len(Q), data_ref.date())
+            pesos = bl.executar(P=P, Q=Q, Omega=Omega, peso_maximo=self.peso_maximo)["pesos_otimos"]
 
         except ValueError:
-            log.debug(f"BL+RSI: sem views em {data_ref.date()} — usando equilíbrio.")
-            return bl.executar(peso_maximo=self.peso_maximo)["pesos_otimos"]
+            log.info("[%s] Sem views RSI em %s — usando equilíbrio.", self.nome, data_ref.date())
+            pesos = bl.executar(peso_maximo=self.peso_maximo)["pesos_otimos"]
+
+        log.info("[%s] Pesos calculados.", self.nome)
+        return pesos
 
 
 # ────────────────────────────────────────────────────────────
@@ -337,6 +365,7 @@ class BlackLittermanMomentum(EstrategiaBase):
         retornos_treino: pd.DataFrame,
         precos_treino: pd.DataFrame,
     ) -> pd.Series:
+        log.info("[%s] Calculando pesos com view de momentum...", self.nome)
         mc   = self.market_caps.reindex(retornos_treino.columns).dropna()
         ret  = retornos_treino[mc.index]
         prec = precos_treino[mc.index]
@@ -353,7 +382,9 @@ class BlackLittermanMomentum(EstrategiaBase):
             periodo_momentum=self.periodo_momentum,
             tau=self.tau,
         )
-        return bl.executar(P=P, Q=Q, Omega=Omega, peso_maximo=self.peso_maximo)["pesos_otimos"]
+        pesos = bl.executar(P=P, Q=Q, Omega=Omega, peso_maximo=self.peso_maximo)["pesos_otimos"]
+        log.info("[%s] Pesos calculados.", self.nome)
+        return pesos
 
 
 # ────────────────────────────────────────────────────────────
@@ -420,6 +451,7 @@ class BlackLittermanCombinado(EstrategiaBase):
         retornos_treino: pd.DataFrame,
         precos_treino: pd.DataFrame,
     ) -> pd.Series:
+        log.info("[%s] Calculando pesos com views RSI + Momentum...", self.nome)
         mc   = self.market_caps.reindex(retornos_treino.columns).dropna()
         ret  = retornos_treino[mc.index]
         prec = precos_treino[mc.index]
@@ -441,6 +473,7 @@ class BlackLittermanCombinado(EstrategiaBase):
         P_final  = P_mom
         Q_final  = Q_mom
         Om_final = Om_mom
+        n_views_rsi = 0
 
         # Views de RSI (opcionais — combina se disponível)
         try:
@@ -452,14 +485,25 @@ class BlackLittermanCombinado(EstrategiaBase):
                 retorno_esperado_view=self.retorno_view_rsi,
                 tau=self.tau,
             )
-            P_final  = np.vstack([P_rsi, P_mom])
-            Q_final  = np.concatenate([Q_rsi, Q_mom])
-            Om_final = scipy.linalg.block_diag(Om_rsi, Om_mom)
-            log.debug(f"Combinado: {len(Q_rsi)} view(s) RSI + 1 view momentum")
+            P_final   = np.vstack([P_rsi, P_mom])
+            Q_final   = np.concatenate([Q_rsi, Q_mom])
+            Om_final  = scipy.linalg.block_diag(Om_rsi, Om_mom)
+            n_views_rsi = len(Q_rsi)
 
         except ValueError:
-            log.debug(f"Combinado: sem views RSI em {data_ref.date()} — só momentum")
+            log.info("[%s] Sem views RSI em %s — usando só momentum.", self.nome, data_ref.date())
 
-        return bl.executar(
+        log.info(
+            "[%s] Total de views: %d RSI + 1 momentum = %d.",
+            self.nome, n_views_rsi, n_views_rsi + 1,
+        )
+        log.debug(
+            "[%s] Q combinado: %s",
+            self.nome, Q_final.round(4).tolist(),
+        )
+
+        pesos = bl.executar(
             P=P_final, Q=Q_final, Omega=Om_final, peso_maximo=self.peso_maximo
         )["pesos_otimos"]
+        log.info("[%s] Pesos calculados.", self.nome)
+        return pesos

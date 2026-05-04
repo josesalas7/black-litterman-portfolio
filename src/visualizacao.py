@@ -36,7 +36,7 @@ def _salvar(fig: plt.Figure, caminho: Path | None) -> None:
     if caminho is not None:
         caminho.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(caminho, dpi=DPI_SAVE, bbox_inches="tight")
-        log.info(f"Figura salva em: {caminho}")
+        log.info("Figura salva em: %s", caminho)
 
 
 def _drawdown_serie(retornos: pd.Series) -> pd.Series:

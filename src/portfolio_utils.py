@@ -42,10 +42,21 @@ def calcular_matriz_covariancia(
     if retornos.isnull().all().all():
         raise ValueError("retornos contém apenas valores nulos.")
 
+    n_obs, n_ativos = retornos.shape
+    log.info("Calculando matriz de covariância amostral (%d ativos, %d obs)...", n_ativos, n_obs)
+
     cov = retornos.cov()
     if anualizar:
         cov = cov * DIAS_ANO_CRIPTO
-    log.debug("Covariância amostral calculada (shape=%s)", cov.shape)
+
+    det = np.linalg.det(cov.values)
+    vols = np.sqrt(np.diag(cov.values))
+    log.debug("Covariância amostral: shape=%s, det=%.6e", cov.shape, det)
+    log.debug("Volatilidades anualizadas: %s", dict(zip(retornos.columns, vols.round(4))))
+    if det < 1e-12:
+        log.warning("Matriz de covariância quasi-singular (det=%.2e). Use Ledoit-Wolf.", det)
+
+    log.info("Matriz de covariância amostral calculada com sucesso.")
     return cov
 
 
@@ -80,17 +91,25 @@ def calcular_matriz_covariancia_ledoitwolf(
         raise ValueError("retornos contém apenas valores nulos.")
 
     dados = retornos.dropna()
-    lw = LedoitWolf().fit(dados.values)
+    n_obs, n_ativos = dados.shape
+    log.info(
+        "Calculando matriz de covariância Ledoit-Wolf (%d ativos, %d obs)...",
+        n_ativos, n_obs,
+    )
 
+    lw = LedoitWolf().fit(dados.values)
     cov = pd.DataFrame(lw.covariance_, index=retornos.columns, columns=retornos.columns)
     if anualizar:
         cov = cov * DIAS_ANO_CRIPTO
 
+    det = np.linalg.det(cov.values)
+    vols = np.sqrt(np.diag(cov.values))
     log.debug(
-        "Ledoit-Wolf calculado: shrinkage=%.4f, shape=%s",
-        lw.shrinkage_,
-        cov.shape,
+        "Ledoit-Wolf: shrinkage=%.4f, shape=%s, det=%.6e",
+        lw.shrinkage_, cov.shape, det,
     )
+    log.debug("Volatilidades anualizadas (LW): %s", dict(zip(retornos.columns, vols.round(4))))
+    log.info("Ledoit-Wolf calculado com sucesso (shrinkage=%.4f).", lw.shrinkage_)
     return cov
 
 

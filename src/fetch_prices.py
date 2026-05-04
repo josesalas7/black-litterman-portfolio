@@ -59,8 +59,31 @@ def coletar_todos_pares() -> pd.DataFrame:
 
 def calcular_retornos(df_precos: pd.DataFrame) -> pd.DataFrame:
     """Calcula log-retornos diários a partir dos preços de fechamento."""
+    n_ativos = df_precos.shape[1]
+    log.info("Calculando log-retornos diários (%d ativos)...", n_ativos)
+
     retornos = np.log(df_precos / df_precos.shift(1))
-    return retornos.dropna(how="all")
+    retornos = retornos.dropna(how="all")
+
+    n_obs  = retornos.shape[0]
+    n_nans = retornos.isnull().sum().sum()
+    log.debug(
+        "Log-retornos: shape=(%d, %d), NaNs=%d",
+        n_obs, n_ativos, n_nans,
+    )
+    log.debug(
+        "Retorno médio diário por ativo (%%): %s",
+        dict((retornos.mean() * 100).round(4)),
+    )
+    log.debug(
+        "Volatilidade diária por ativo (%%): %s",
+        dict((retornos.std() * 100).round(4)),
+    )
+    log.info(
+        "Log-retornos calculados: %d dias x %d ativos.",
+        n_obs, n_ativos,
+    )
+    return retornos
 
 
 def main():

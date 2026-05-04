@@ -160,17 +160,34 @@ def gerar_views_rsi(
     ativos = list(precos.columns)
     n = len(ativos)
 
-    dados_ate_ref = precos.loc[:data_referencia]
+    log.info(
+        "[Views RSI] Gerando views absolutas para %s "
+        "(thresholds: compra<%.0f, venda>%.0f, magnitude=%.1f%% a.a.)...",
+        data_referencia.date(), threshold_compra, threshold_venda,
+        retorno_esperado_view * 100,
+    )
 
+    dados_ate_ref = precos.loc[:data_referencia]
     P_linhas, Q_vals = [], []
 
-    for i, ativo in enumerate(ativos):
+    # Calcula RSI para todos os ativos e loga tabela de debug
+    rsi_por_ativo: dict[str, float] = {}
+    for ativo in ativos:
         rsi_serie = calcular_rsi(dados_ate_ref[ativo].dropna())
         if rsi_serie.empty or rsi_serie.isna().all():
             continue
-
         rsi_atual = rsi_serie.iloc[-1]
-        if np.isnan(rsi_atual):
+        if not np.isnan(rsi_atual):
+            rsi_por_ativo[ativo] = rsi_atual
+
+    log.debug("RSI por ativo em %s:", data_referencia.date())
+    for ativo, rsi_val in rsi_por_ativo.items():
+        sinal = "COMPRA" if rsi_val < threshold_compra else ("VENDA" if rsi_val > threshold_venda else "neutro")
+        log.debug("  %-8s  RSI=%.1f  [%s]", ativo, rsi_val, sinal)
+
+    for i, ativo in enumerate(ativos):
+        rsi_atual = rsi_por_ativo.get(ativo)
+        if rsi_atual is None:
             continue
 
         if rsi_atual < threshold_compra:
@@ -178,14 +195,19 @@ def gerar_views_rsi(
             linha[i] = 1.0
             P_linhas.append(linha)
             Q_vals.append(retorno_esperado_view)
-            log.info(f"View RSI positiva: {ativo} (RSI={rsi_atual:.1f})")
-
+            log.info(
+                "  View positiva: %-8s  RSI=%.1f  Q=+%.1f%% a.a.",
+                ativo, rsi_atual, retorno_esperado_view * 100,
+            )
         elif rsi_atual > threshold_venda:
             linha = np.zeros(n)
             linha[i] = 1.0
             P_linhas.append(linha)
             Q_vals.append(-retorno_esperado_view)
-            log.info(f"View RSI negativa: {ativo} (RSI={rsi_atual:.1f})")
+            log.info(
+                "  View negativa: %-8s  RSI=%.1f  Q=-%.1f%% a.a.",
+                ativo, rsi_atual, retorno_esperado_view * 100,
+            )
 
     if not P_linhas:
         raise ValueError(
@@ -200,7 +222,14 @@ def gerar_views_rsi(
     cov_anual = calcular_matriz_covariancia_ledoitwolf(retornos_temp).values
     Omega = _calcular_omega_idzorek(P, cov_anual, tau)
 
-    log.info(f"{len(Q_vals)} view(s) RSI gerada(s) para {data_referencia.date()}")
+    log.debug("Omega diagonal (incerteza das views RSI):")
+    for i, q in enumerate(Q):
+        log.debug("  view[%d]  Q=%.4f  Omega_ii=%.6f", i, q, Omega[i, i])
+
+    log.info(
+        "[Views RSI] %d view(s) gerada(s) para %s.",
+        len(Q_vals), data_referencia.date(),
+    )
     return P, Q, Omega
 
 
@@ -243,14 +272,27 @@ def gerar_views_momentum(
             f"top_n ({top_n}) + bottom_n ({bottom_n}) > n_ativos ({n})."
         )
 
+    log.info(
+        "[Views Momentum] Gerando view relativa para %s "
+        "(janela=%dd, top=%d, bottom=%d, spread=%.1f%% a.a.)...",
+        data_referencia.date(), periodo_momentum, top_n, bottom_n,
+        spread_esperado * 100,
+    )
+
     dados_ate_ref = precos.loc[:data_referencia]
     mom = calcular_momentum(dados_ate_ref, periodo=periodo_momentum).iloc[-1]
     mom = mom.dropna().sort_values(ascending=False)
 
+    log.debug("Momentum (%d dias) por ativo em %s:", periodo_momentum, data_referencia.date())
+    for ativo, mom_val in mom.items():
+        posicao = "LONG" if ativo in mom.index[:top_n] else ("SHORT" if ativo in mom.index[-bottom_n:] else "neutro")
+        log.debug("  %-8s  mom=%.4f (%.1f%%)  [%s]", ativo, mom_val, mom_val * 100, posicao)
+
     top_ativos    = list(mom.index[:top_n])
     bottom_ativos = list(mom.index[-bottom_n:])
 
-    log.info(f"Momentum top: {top_ativos} | bottom: {bottom_ativos}")
+    log.info("  Long (top-%d):   %s", top_n, top_ativos)
+    log.info("  Short (bottom-%d): %s", bottom_n, bottom_ativos)
 
     # View: long top com peso 1/top_n, short bottom com peso -1/bottom_n
     linha = np.zeros(n)
@@ -266,6 +308,14 @@ def gerar_views_momentum(
     cov_anual = calcular_matriz_covariancia_ledoitwolf(retornos_temp).values
     Omega = _calcular_omega_idzorek(P, cov_anual, tau)
 
+    log.debug(
+        "[Views Momentum] Q=%.4f (%.1f%% a.a.)  Omega_ii=%.6f",
+        Q[0], Q[0] * 100, Omega[0, 0],
+    )
+    log.info(
+        "[Views Momentum] View relativa gerada para %s. Q=%.4f (%.1f%% a.a.).",
+        data_referencia.date(), Q[0], Q[0] * 100,
+    )
     return P, Q, Omega
 
 

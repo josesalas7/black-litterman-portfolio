@@ -45,9 +45,15 @@ from src.visualizacao import (
 )
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+# Silencia loggers verbosos de bibliotecas externas
+logging.getLogger("yfinance").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
+logging.getLogger("sklearn").setLevel(logging.WARNING)
+
 log = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────────────────────
@@ -62,7 +68,10 @@ PESO_MAXIMO       = 0.40
 
 def carregar_dados() -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
     """Carrega retornos, preços e market caps do disco."""
-    log.info("Carregando dados...")
+    log.info("=" * 55)
+    log.info("[Etapa 0] Carregando dados do disco...")
+    log.info("=" * 55)
+
     retornos = pd.read_parquet(ARQUIVO_RETORNOS)
     precos   = pd.read_parquet(ARQUIVO_PRECOS)
 
@@ -76,8 +85,28 @@ def carregar_dados() -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
     precos      = precos[ativos]
     market_caps = market_caps[ativos]
 
-    log.info(f"Ativos: {list(ativos)}")
-    log.info(f"Período retornos: {retornos.index.min().date()} → {retornos.index.max().date()}")
+    n_ativos = len(ativos)
+    n_obs    = retornos.shape[0]
+    log.info(
+        "[Etapa 0] Dados carregados: %d ativos, %d observacoes.",
+        n_ativos, n_obs,
+    )
+    log.info(
+        "[Etapa 0] Periodo: %s -> %s",
+        retornos.index.min().date(), retornos.index.max().date(),
+    )
+    log.info("[Etapa 0] Ativos: %s", list(ativos))
+    log.debug(
+        "[Etapa 0] NaNs por ativo nos retornos: %s",
+        dict(retornos.isnull().sum()),
+    )
+    log.debug(
+        "[Etapa 0] Market caps (USD, ordem decrescente):"
+    )
+    for ativo, mc in market_caps.sort_values(ascending=False).items():
+        peso = mc / market_caps.sum()
+        log.debug("  %-8s  $%.2fB  (%.1f%%)", ativo, mc / 1e9, peso * 100)
+
     return retornos, precos, market_caps
 
 
@@ -187,14 +216,14 @@ def gerar_plots(resultados: dict, estrategias_bl: list[str]) -> None:
 
     import matplotlib.pyplot as plt
     plt.close("all")
-    log.info(f"Plots salvos em: {DIR_FIGURAS}")
+    log.info("Plots salvos em: %s", DIR_FIGURAS)
 
 
 def main() -> None:
     log.info("=" * 60)
     log.info("BACKTEST WALK-FORWARD — BLACK-LITTERMAN CRYPTO")
     log.info("=" * 60)
-    log.info(f"Lookback: {LOOKBACK_DAYS} dias | Holding: {HOLDING_DAYS} dias")
+    log.info("Lookback: %d dias | Holding: %d dias", LOOKBACK_DAYS, HOLDING_DAYS)
 
     # 1. Carregar dados
     retornos, precos, market_caps = carregar_dados()
@@ -208,8 +237,8 @@ def main() -> None:
         holding_period_days=HOLDING_DAYS,
     )
     datas = backtest.gerar_datas_rebalanceamento()
-    log.info(f"Período de teste: {datas[0].date()} → {datas[-1].date()}")
-    log.info(f"Total de rebalanceamentos: {len(datas)}")
+    log.info("Periodo de teste: %s -> %s", datas[0].date(), datas[-1].date())
+    log.info("Total de rebalanceamentos: %d", len(datas))
 
     # 3. Definir estratégias
     estrategias = definir_estrategias(market_caps)

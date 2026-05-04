@@ -34,10 +34,11 @@ class BlackLitterman:
     """Modelo Black-Litterman para otimização de portfólio de criptomoedas.
 
     Args:
-        retornos:      DataFrame de log-retornos diários (linhas=datas, colunas=ativos).
-        market_caps:   Series com market cap por ativo (mesmo índice que colunas de retornos).
-        risk_aversion: λ — aversão ao risco do investidor representativo (típico: 2–4).
-        tau:           Escala da incerteza nos retornos de equilíbrio (típico: 0.025–0.05).
+        retornos:         DataFrame de log-retornos diários (linhas=datas, colunas=ativos).
+        market_caps:      Series com market cap por ativo (mesmo índice que colunas de retornos).
+        risk_aversion:    λ — aversão ao risco do investidor representativo (típico: 2–4).
+        tau:              Escala da incerteza nos retornos de equilíbrio (típico: 0.025–0.05).
+        usar_ledoit_wolf: Se True (padrão), usa Ledoit-Wolf para a covariância.
     """
 
     def __init__(
@@ -56,7 +57,7 @@ class BlackLitterman:
             raise ValueError("Nenhum ativo em comum entre retornos e market_caps.")
         if len(ativos_comuns) < len(retornos.columns):
             ausentes = set(retornos.columns) - set(ativos_comuns)
-            log.warning(f"Ativos sem market cap, removidos: {ausentes}")
+            log.warning("Ativos sem market cap removidos: %s", ausentes)
 
         self.retornos      = retornos[ativos_comuns].copy()
         self.market_caps   = market_caps[ativos_comuns].copy()
@@ -64,6 +65,18 @@ class BlackLitterman:
         self.tau           = tau
         self.ativos        = list(ativos_comuns)
         self.n             = len(self.ativos)
+
+        n_obs = self.retornos.shape[0]
+        log.info(
+            "BlackLitterman: %d ativos, %d observacoes, lambda=%.2f, tau=%.3f",
+            self.n, n_obs, risk_aversion, tau,
+        )
+        log.debug("Ativos: %s", self.ativos)
+        log.debug(
+            "Periodo dos retornos: %s -> %s",
+            self.retornos.index.min().date(),
+            self.retornos.index.max().date(),
+        )
 
         # Covariância anualizada — Ledoit-Wolf por padrão (evita matrizes singulares)
         if usar_ledoit_wolf:
@@ -73,10 +86,7 @@ class BlackLitterman:
             self.cov = calcular_matriz_covariancia(self.retornos, anualizar=True)
             estimador = "amostral"
 
-        log.info(
-            "BlackLitterman inicializado: %d ativos, λ=%.2f, τ=%.3f, cov=%s",
-            self.n, risk_aversion, tau, estimador,
-        )
+        log.info("Covariância calculada com estimador: %s", estimador)
 
     # ────────────────────────────────────────────────────────
     # Etapa 1 — Pesos de mercado
@@ -88,8 +98,19 @@ class BlackLitterman:
         Returns:
             Series com pesos normalizados (soma = 1).
         """
+        log.info("[Etapa 1] Calculando pesos de mercado (w = market_cap / sum)...")
+
         w = self.market_caps / self.market_caps.sum()
-        log.debug(f"Pesos de mercado:\n{w.round(4)}")
+
+        log.debug("Pesos de mercado por ativo:")
+        for ativo, peso in w.sort_values(ascending=False).items():
+            log.debug("  %-8s  %.4f  (%.1f%%)", ativo, peso, peso * 100)
+
+        log.info(
+            "[Etapa 1] Pesos de mercado calculados. "
+            "Top-3: %s",
+            dict(w.sort_values(ascending=False).head(3).round(4)),
+        )
         return w
 
     # ────────────────────────────────────────────────────────
@@ -105,10 +126,25 @@ class BlackLitterman:
         Returns:
             Series com retornos implícitos anualizados por ativo.
         """
+        log.info(
+            "[Etapa 2] Calculando risk premium implícito (Pi = lambda * Sigma * w_mkt, "
+            "lambda=%.2f)...",
+            self.risk_aversion,
+        )
+
         w_mkt = self.calcular_pesos_mercado()
         pi    = self.risk_aversion * self.cov.values @ w_mkt.values
         pi_series = pd.Series(pi, index=self.ativos, name="retornos_implicitos")
-        log.debug(f"Retornos implícitos (Π):\n{pi_series.round(4)}")
+
+        log.debug("Retornos implícitos Pi (anualizados):")
+        for ativo, val in pi_series.sort_values(ascending=False).items():
+            log.debug("  %-8s  %.4f  (%.1f%% a.a.)", ativo, val, val * 100)
+
+        log.info(
+            "[Etapa 2] Risk premium calculado. "
+            "Intervalo: [%.4f, %.4f]",
+            pi_series.min(), pi_series.max(),
+        )
         return pi_series
 
     # ────────────────────────────────────────────────────────
@@ -138,6 +174,22 @@ class BlackLitterman:
         """
         self._validar_views(P, Q, Omega)
 
+        k = len(Q)
+        log.info(
+            "[Etapa 3] Combinando views com prior BL (k=%d views, tau=%.3f)...",
+            k, self.tau,
+        )
+
+        log.debug("Views Q (retorno anual esperado por view):")
+        for i, q in enumerate(Q):
+            log.debug("  view[%d]  Q=%.4f (%.1f%% a.a.)", i, q, q * 100)
+
+        log.debug("Omega diagonal (incerteza por view):")
+        for i in range(k):
+            log.debug("  view[%d]  Omega_ii=%.6f", i, Omega[i, i])
+
+        log.debug("Matriz P (shape=%s):\n%s", P.shape, P.round(4))
+
         pi    = self.calcular_retornos_implicitos().values
         Sigma = self.cov.values
         tau   = self.tau
@@ -146,16 +198,26 @@ class BlackLitterman:
         tauSigma_inv = np.linalg.inv(tauSigma)
         Omega_inv    = np.linalg.inv(Omega)
 
-        # Parte esquerda: [(τΣ)⁻¹ + P'Ω⁻¹P]⁻¹
         M_inv = np.linalg.inv(tauSigma_inv + P.T @ Omega_inv @ P)
-
-        # Parte direita: (τΣ)⁻¹Π + P'Ω⁻¹Q
-        rhs = tauSigma_inv @ pi + P.T @ Omega_inv @ Q
-
+        rhs   = tauSigma_inv @ pi + P.T @ Omega_inv @ Q
         mu_bl = M_inv @ rhs
 
         result = pd.Series(mu_bl, index=self.ativos, name="retornos_combinados")
-        log.info(f"Retornos combinados (BL):\n{result.round(4)}")
+
+        log.debug("Retornos combinados (posterior BL) vs prior (Pi):")
+        for ativo in self.ativos:
+            pi_val  = pd.Series(pi, index=self.ativos)[ativo]
+            bl_val  = result[ativo]
+            delta   = bl_val - pi_val
+            log.debug(
+                "  %-8s  Pi=%.4f  BL=%.4f  delta=%+.4f",
+                ativo, pi_val, bl_val, delta,
+            )
+
+        log.info(
+            "[Etapa 3] Views combinadas. Desvio medio do prior: %.4f",
+            (result.values - pi).mean(),
+        )
         return result
 
     # ────────────────────────────────────────────────────────
@@ -194,15 +256,23 @@ class BlackLitterman:
         lam   = self.risk_aversion
         n     = len(mu)
 
+        log.info(
+            "[Etapa 4] Iniciando otimização media-variância "
+            "(n=%d ativos, lambda=%.2f, peso_max=%.0f%%)...",
+            n, lam, peso_maximo * 100,
+        )
+        log.debug(
+            "Retornos esperados mu (anualizados): %s",
+            dict(zip(self.ativos, mu.round(4))),
+        )
+
         def objetivo(w):
             return -(w @ mu - (lam / 2) * w @ Sigma @ w)
 
         restricoes = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
-
         lb = -1.0 if permitir_short else 0.0
         limites = [(lb, peso_maximo)] * n
-
-        w0 = np.ones(n) / n  # chute inicial igualmente ponderado
+        w0 = np.ones(n) / n
 
         resultado = minimize(
             objetivo,
@@ -215,12 +285,22 @@ class BlackLitterman:
 
         if not resultado.success:
             raise RuntimeError(
-                f"Otimização não convergiu: {resultado.message}"
+                f"Otimizacao nao convergiu: {resultado.message}"
             )
 
         pesos = pd.Series(resultado.x, index=self.ativos, name="pesos_otimos")
-        pesos = pesos.clip(lower=0).div(pesos.clip(lower=0).sum())  # normaliza resíduos numéricos
-        log.info(f"Pesos ótimos:\n{pesos.round(4)}")
+        pesos = pesos.clip(lower=0).div(pesos.clip(lower=0).sum())
+
+        log.debug("Pesos otimos por ativo:")
+        for ativo, peso in pesos.sort_values(ascending=False).items():
+            log.debug("  %-8s  %.4f  (%.1f%%)", ativo, peso, peso * 100)
+
+        n_ativos_ativos = (pesos > 1e-4).sum()
+        log.info(
+            "[Etapa 4] Otimizacao concluida em %d iteracoes. "
+            "%d/%d ativos com peso > 0.01%%.",
+            resultado.nit, n_ativos_ativos, n,
+        )
         return pesos
 
     # ────────────────────────────────────────────────────────
@@ -254,35 +334,37 @@ class BlackLitterman:
                 'estatisticas':         dict
         """
         log.info("=" * 55)
-        log.info("EXECUTANDO MODELO BLACK-LITTERMAN")
+        log.info("PIPELINE BLACK-LITTERMAN (%d ativos)", self.n)
         log.info("=" * 55)
 
         # Etapas 1 e 2
         w_mkt = self.calcular_pesos_mercado()
-        log.info(f"[1/4] Pesos de mercado calculados ({self.n} ativos)")
-
-        pi = self.calcular_retornos_implicitos()
-        log.info("[2/4] Retornos implícitos de equilíbrio calculados")
+        pi    = self.calcular_retornos_implicitos()
 
         # Etapa 3: combinar views ou usar equilíbrio puro
         tem_views = P is not None and Q is not None and Omega is not None
         if tem_views:
             mu_bl = self.combinar_views(P, Q, Omega)
-            log.info(f"[3/4] Views combinadas ({len(Q)} view(s) ativa(s))")
+            log.info("[3/4] %d view(s) incorporada(s) ao prior.", len(Q))
         else:
             mu_bl = pi.copy()
             mu_bl.name = "retornos_combinados"
-            log.info("[3/4] Sem views — usando retornos de equilíbrio")
+            log.info("[3/4] Sem views — usando retornos de equilibrio (Pi).")
 
         # Etapa 4: otimização
         pesos = self.otimizar(mu_bl, self.cov, **kwargs_otimizacao)
-        log.info("[4/4] Otimização concluída")
 
         # Estatísticas do portfólio otimizado
         ret_portfolio = aplicar_pesos(self.retornos, pesos)
         stats = estatisticas_portfolio(ret_portfolio)
 
-        log.info(f"Estatísticas: {stats}")
+        log.info(
+            "Pipeline concluido. Retorno anual=%.1f%%, Vol=%.1f%%, Sharpe=%.2f, MDD=%.1f%%",
+            stats["retorno_anual_%"],
+            stats["volatilidade_%"],
+            stats["sharpe"],
+            stats["max_drawdown_%"],
+        )
         log.info("=" * 55)
 
         return {
