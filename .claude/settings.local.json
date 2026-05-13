@@ -6,7 +6,9 @@
       "Bash(ConvertTo-Json)",
       "PowerShell(head -100)",
       "Bash(Remove-Item \"c:\\\\Users\\\\joses\\\\Documents\\\\black-litterman-portfolio\\\\README copy.md\" -Force)",
-      "Bash(Write-Host \"done\")"
+      "Bash(Write-Host \"done\")",
+      "Bash(.venv\\\\Scripts\\\\pip.exe freeze *)",
+      "Bash(pip install *)"
     ]
   }
 }
