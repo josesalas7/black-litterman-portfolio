@@ -241,8 +241,17 @@ class WalkForwardBacktest:
 
             treino = self.janela_treino(data_t)
 
-            # Remove ativos com qualquer NaN na janela de treino
+            # Remove ativos com NaN na janela (histórico insuficiente ou gaps).
+            # Decisão baseada APENAS em dados anteriores a data_t — sem lookahead.
             treino_limpo = treino.dropna(axis=1, how="any")
+
+            excluidos = sorted(set(treino.columns) - set(treino_limpo.columns))
+            if excluidos:
+                log.info(
+                    "[%s] %s — Ativos excluídos por histórico insuficiente: %s",
+                    estrategia.nome, data_t.date(), excluidos,
+                )
+
             if treino_limpo.empty:
                 log.warning("Treino vazio em %s — pulando.", data_t.date())
                 continue

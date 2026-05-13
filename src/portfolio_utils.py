@@ -8,9 +8,9 @@ import logging
 import numpy as np
 import pandas as pd
 
-log = logging.getLogger(__name__)
+from src.config import DIAS_ANO_CRIPTO  # re-exportado para backward compat
 
-DIAS_ANO_CRIPTO = 365  # cripto opera 24/7, sem fins de semana
+log = logging.getLogger(__name__)
 
 
 # ────────────────────────────────────────────────────────────

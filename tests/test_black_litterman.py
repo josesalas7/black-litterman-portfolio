@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.black_litterman import BlackLitterman
+from src.black_litterman import BlackLitterman, inverter_matriz_robusta
 
 
 @pytest.fixture
@@ -119,6 +119,37 @@ class TestOtimizacao:
     def test_peso_maximo_respeitado(self, bl):
         resultado = bl.executar(peso_maximo=0.30)
         assert resultado["pesos_otimos"].max() <= 0.30 + 1e-6
+
+
+class TestInvertirMatrizRobusta:
+    def test_inverte_matriz_bem_condicionada(self):
+        M = np.array([[2.0, 0.5], [0.5, 3.0]])
+        M_inv = inverter_matriz_robusta(M, "M_teste")
+        np.testing.assert_array_almost_equal(M @ M_inv, np.eye(2), decimal=10)
+
+    def test_usa_pseudo_inversa_para_singular(self):
+        # Matriz singular (rank 1) → cond = inf
+        M = np.array([[1.0, 1.0], [1.0, 1.0]])
+        result = inverter_matriz_robusta(M, "singular")
+        # Pseudo-inversa existe e é finita mesmo para singular
+        assert np.all(np.isfinite(result))
+
+    def test_rejeita_matriz_nao_quadrada(self):
+        M = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        with pytest.raises(ValueError, match="quadrada"):
+            inverter_matriz_robusta(M, "retangular")
+
+    def test_inverte_identidade(self):
+        M = np.eye(4)
+        result = inverter_matriz_robusta(M, "I")
+        np.testing.assert_array_almost_equal(result, np.eye(4))
+
+    def test_resultado_correto_para_diagonal(self):
+        d = np.array([2.0, 4.0, 8.0])
+        M = np.diag(d)
+        result = inverter_matriz_robusta(M, "diag")
+        expected = np.diag(1.0 / d)
+        np.testing.assert_array_almost_equal(result, expected, decimal=10)
 
 
 class TestValidacaoInputs:

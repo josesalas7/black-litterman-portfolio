@@ -30,6 +30,39 @@ from src.portfolio_utils import (
 log = logging.getLogger(__name__)
 
 
+def inverter_matriz_robusta(M: np.ndarray, nome: str = "M") -> np.ndarray:
+    """Inverte matriz com fallback para pseudo-inversa se mal-condicionada.
+
+    Loga cond(M). Se cond > 1e10, emite warning e usa np.linalg.pinv em
+    vez de np.linalg.inv, evitando erros numéricos em matrizes singulares
+    ou quase-singulares (comum em janelas curtas de cripto com alta correlação).
+
+    Args:
+        M: Matriz quadrada a inverter.
+        nome: Identificador para logging (ex: "Sigma", "Omega").
+
+    Returns:
+        Inversa (ou pseudo-inversa) de M.
+
+    Raises:
+        ValueError: Se M não for quadrada.
+    """
+    if M.ndim != 2 or M.shape[0] != M.shape[1]:
+        raise ValueError(f"Matriz {nome} deve ser quadrada (shape={M.shape}).")
+
+    cond = np.linalg.cond(M)
+    log.debug("cond(%s) = %.2e", nome, cond)
+
+    if cond > 1e10:
+        log.warning(
+            "Matriz %s mal-condicionada (cond=%.2e > 1e10) — usando pseudo-inversa.",
+            nome, cond,
+        )
+        return np.linalg.pinv(M)
+
+    return np.linalg.inv(M)
+
+
 class BlackLitterman:
     """Modelo Black-Litterman para otimização de portfólio de criptomoedas.
 
@@ -72,11 +105,18 @@ class BlackLitterman:
             self.n, n_obs, risk_aversion, tau,
         )
         log.debug("Ativos: %s", self.ativos)
-        log.debug(
-            "Periodo dos retornos: %s -> %s",
-            self.retornos.index.min().date(),
-            self.retornos.index.max().date(),
-        )
+        if hasattr(self.retornos.index, "date"):
+            log.debug(
+                "Periodo dos retornos: %s -> %s",
+                self.retornos.index.min().date(),
+                self.retornos.index.max().date(),
+            )
+        else:
+            log.debug(
+                "Periodo dos retornos: [%s, %s]",
+                self.retornos.index.min(),
+                self.retornos.index.max(),
+            )
 
         # Covariância anualizada — Ledoit-Wolf por padrão (evita matrizes singulares)
         if usar_ledoit_wolf:
@@ -161,18 +201,32 @@ class BlackLitterman:
 
         E[R] = [(τΣ)⁻¹ + P'Ω⁻¹P]⁻¹ · [(τΣ)⁻¹Π + P'Ω⁻¹Q]
 
+        ESCALA: Q deve estar em retorno ANUAL (mesma escala de Π = λΣw).
+        Σ é anualizada (× 365), portanto Π é anualizada. Q deve seguir
+        a mesma escala para que a combinação bayesiana seja coerente.
+        Use `views.view_diaria_para_anual()` se tiver views em escala diária.
+
         Args:
             P:     Matriz k×n de mapeamento views→ativos.
-            Q:     Vetor k de retornos esperados das views.
-            Omega: Matriz k×k diagonal de incerteza das views.
+            Q:     Vetor k de retornos anuais esperados das views
+                   (ex: 0.05 = 5% a.a.).
+            Omega: Matriz k×k diagonal de incerteza das views (escala anual²).
 
         Returns:
-            Series com retornos esperados combinados por ativo.
+            Series com retornos esperados combinados por ativo (escala anual).
 
         Raises:
             ValueError: Se dimensões de P, Q, Omega forem inconsistentes.
         """
         self._validar_views(P, Q, Omega)
+
+        if np.abs(Q).max() > 0.1:
+            log.warning(
+                "Q contém valores > 10%% ao dia (max=%.4f). "
+                "Verifique se Q está em escala diária em vez de anual — "
+                "o modelo espera retorno ANUAL consistente com Sigma anualizada.",
+                np.abs(Q).max(),
+            )
 
         k = len(Q)
         log.info(
@@ -195,10 +249,10 @@ class BlackLitterman:
         tau   = self.tau
 
         tauSigma     = tau * Sigma
-        tauSigma_inv = np.linalg.inv(tauSigma)
-        Omega_inv    = np.linalg.inv(Omega)
+        tauSigma_inv = inverter_matriz_robusta(tauSigma, "tau*Sigma")
+        Omega_inv    = inverter_matriz_robusta(Omega, "Omega")
 
-        M_inv = np.linalg.inv(tauSigma_inv + P.T @ Omega_inv @ P)
+        M_inv = inverter_matriz_robusta(tauSigma_inv + P.T @ Omega_inv @ P, "M_bl")
         rhs   = tauSigma_inv @ pi + P.T @ Omega_inv @ Q
         mu_bl = M_inv @ rhs
 
@@ -236,17 +290,22 @@ class BlackLitterman:
         Problema:
             max  w'μ - (λ/2) w'Σw
             s.t. Σw = 1
-                 w_i ≥ 0          (se não permitir short)
+                 w_i ≥ 0          (long-only, default — ver permitir_short)
                  w_i ≤ peso_maximo
+
+        Default é long-only (permitir_short=False): cada peso fica entre
+        [0, peso_maximo], o que reflete portfólios institucionais de cripto
+        onde short via perp tem custo de funding elevado.
 
         Args:
             retornos_esperados: Series μ com retornos esperados por ativo.
             cov:                DataFrame Σ de covariância.
-            permitir_short:     Se True, remove restrição de não-negatividade.
+            permitir_short:     Se True, remove bound inferior (lb=-1).
+                                Default False (long-only).
             peso_maximo:        Limite superior por ativo (0 < peso_maximo ≤ 1).
 
         Returns:
-            Series com pesos ótimos normalizados.
+            Series com pesos ótimos normalizados (soma = 1, ≥ 0 por padrão).
 
         Raises:
             RuntimeError: Se a otimização não convergir.

@@ -7,12 +7,16 @@ Checagens essenciais antes de usar os dados no modelo:
 3. Outliers extremos (possíveis erros de dados)
 4. Estatísticas descritivas anualizadas
 5. Resumo de market cap
+6. Relatório de disponibilidade por ativo (data inicial, n_dias, NaNs)
 """
 import logging
 import pandas as pd
 import numpy as np
 
-from src.config import ARQUIVO_PRECOS, ARQUIVO_RETORNOS, ARQUIVO_RELATORIO_QUALIDADE, ARQUIVO_MARKET_CAP
+from src.config import (
+    ARQUIVO_PRECOS, ARQUIVO_RETORNOS, ARQUIVO_RELATORIO_QUALIDADE,
+    ARQUIVO_MARKET_CAP, DIAS_ANO_CRIPTO,
+)
 
 log = logging.getLogger(__name__)
 
@@ -58,18 +62,84 @@ def detectar_outliers(retornos: pd.DataFrame, n_desvios: float = 5.0) -> dict:
 
 
 def estatisticas_basicas(retornos: pd.DataFrame) -> pd.DataFrame:
-    """Estatísticas descritivas anualizadas (base 365 dias, cripto 24/7)."""
-    fator_anual = 365
-
+    """Estatísticas descritivas anualizadas (base DIAS_ANO_CRIPTO = 365, cripto 24/7)."""
     stats = pd.DataFrame({
-        "obs":            retornos.count(),
-        "retorno_anual_%": retornos.mean() * fator_anual * 100,
-        "vol_anual_%":     retornos.std() * np.sqrt(fator_anual) * 100,
-        "sharpe_aprox":    (retornos.mean() * fator_anual) / (retornos.std() * np.sqrt(fator_anual)),
+        "obs":             retornos.count(),
+        "retorno_anual_%": retornos.mean() * DIAS_ANO_CRIPTO * 100,
+        "vol_anual_%":     retornos.std() * np.sqrt(DIAS_ANO_CRIPTO) * 100,
+        "sharpe_aprox":    (retornos.mean() * DIAS_ANO_CRIPTO) / (retornos.std() * np.sqrt(DIAS_ANO_CRIPTO)),
         "min_diario_%":    retornos.min() * 100,
         "max_diario_%":    retornos.max() * 100,
     })
     return stats.round(2)
+
+
+def relatorio_disponibilidade(precos: pd.DataFrame) -> pd.DataFrame:
+    """Relatório de disponibilidade de dados por ativo.
+
+    Para cada ativo: data inicial, data final, n_dias com dados, n_NaN.
+    Útil para identificar ativos com histórico curto (ex: PENDLE, ONDO)
+    que podem causar exclusão dinâmica em backtests com lookback longo.
+
+    Args:
+        precos: DataFrame de preços diários (linhas=datas, colunas=tickers).
+
+    Returns:
+        DataFrame ordenado por data_inicio com colunas:
+        data_inicio, data_fim, n_dias, n_nan, pct_nan, dias_ate_hoje.
+
+    Raises:
+        ValueError: Se precos estiver vazio.
+    """
+    if precos.empty:
+        raise ValueError("precos está vazio.")
+
+    hoje = pd.Timestamp.now().normalize()
+    registros = []
+
+    for ativo in precos.columns:
+        serie = precos[ativo]
+        nao_nulos = serie.dropna()
+
+        if nao_nulos.empty:
+            data_inicio = pd.NaT
+            data_fim = pd.NaT
+            n_dias = 0
+        else:
+            data_inicio = nao_nulos.index.min()
+            data_fim    = nao_nulos.index.max()
+            n_dias      = len(nao_nulos)
+
+        n_nan     = int(serie.isna().sum())
+        n_total   = len(serie)
+        pct_nan   = round(100 * n_nan / n_total, 2) if n_total > 0 else 0.0
+        dias_ate_hoje = (hoje - data_inicio).days if pd.notna(data_inicio) else np.nan
+
+        registros.append({
+            "ativo":         ativo,
+            "data_inicio":   data_inicio,
+            "data_fim":      data_fim,
+            "n_dias":        n_dias,
+            "n_nan":         n_nan,
+            "pct_nan":       pct_nan,
+            "dias_ate_hoje": int(dias_ate_hoje) if not np.isnan(dias_ate_hoje) else np.nan,
+        })
+
+    df = (
+        pd.DataFrame(registros)
+        .set_index("ativo")
+        .sort_values("data_inicio")
+    )
+
+    log.info("Relatório de disponibilidade gerado para %d ativos.", len(df))
+    ativos_curtos = df[df["n_dias"] < 365]
+    if not ativos_curtos.empty:
+        log.warning(
+            "Ativos com menos de 365 dias de histórico: %s",
+            ativos_curtos.index.tolist(),
+        )
+
+    return df
 
 
 def gerar_relatorio() -> str:

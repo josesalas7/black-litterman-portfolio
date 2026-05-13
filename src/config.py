@@ -61,3 +61,17 @@ ARQUIVO_METRICAS_BACKTEST   = DIR_DADOS / "metricas_backtest.csv"
 
 DIR_FIGURAS = DIR_DADOS / "figuras"
 DIR_FIGURAS.mkdir(exist_ok=True)
+
+# ============================================================
+# PARÂMETROS DE ANUALIZAÇÃO
+# ============================================================
+
+DIAS_ANO_CRIPTO = 365  # cripto opera 24/7, sem fins de semana
+
+# ============================================================
+# PARÂMETROS DO MODELO BLACK-LITTERMAN
+# ============================================================
+
+RISK_AVERSION = 2.5   # λ — aversão ao risco (mesmo do backtest principal)
+TAU           = 0.05  # τ — escala da incerteza nos retornos de equilíbrio
+PESO_MAXIMO   = 0.40  # limite superior por ativo na otimização
