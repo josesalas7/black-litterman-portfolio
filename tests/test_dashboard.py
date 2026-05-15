@@ -137,8 +137,14 @@ class TestConstruirViewAbsoluta:
 
     def test_horizonte_1_dia(self):
         _, Q = construir_view_absoluta("BTC", 2.0, 1, UNIVERSO_TEST)
-        # 2%/dia composto por 365 dias → retorno anual muito alto
-        esperado = (1.02) ** DIAS_ANO_CRIPTO - 1
+        # 2%/dia com escalonamento linear → 2% × 365 = 730% a.a.
+        esperado = 0.02 * DIAS_ANO_CRIPTO
+        assert Q[0] == pytest.approx(esperado, rel=1e-9)
+
+    def test_horizonte_30_dias_escalonamento_linear(self):
+        _, Q = construir_view_absoluta("BTC", 5.0, 30, UNIVERSO_TEST)
+        # 5% em 30 dias → escalonamento linear: 5% × 365/30
+        esperado = 0.05 * (DIAS_ANO_CRIPTO / 30)
         assert Q[0] == pytest.approx(esperado, rel=1e-9)
 
 

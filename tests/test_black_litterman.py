@@ -164,3 +164,52 @@ class TestValidacaoInputs:
         _, mc = dados_sinteticos
         with pytest.raises(ValueError, match="vazio"):
             BlackLitterman(pd.DataFrame(), mc)
+
+
+class TestSanidadePosterior:
+    """Testes de sanidade da fórmula bayesiana do BL.
+
+    Propriedades fundamentais que DEVEM ser satisfeitas para qualquer
+    implementação correta do Black-Litterman (1992):
+
+    1. Omega → 0  (confiança ≈ 100%):  posterior do ativo com view → Q exato.
+    2. Omega → ∞  (confiança ≈ 0%):    posterior → retornos de equilíbrio (Pi).
+
+    Estes testes são INDEPENDENTES de como Omega é calculado em produção
+    (Idzorek, simplificado, etc.) — verificam apenas a fórmula central:
+        E[R] = [(τΣ)⁻¹ + P'Ω⁻¹P]⁻¹ · [(τΣ)⁻¹Π + P'Ω⁻¹Q]
+    """
+
+    def test_confianca_total_posterior_igual_view(self, bl):
+        """Omega ≈ 0 (c→100%): posterior do ativo com view ≈ Q."""
+        n = bl.n
+        # View: ETH vai render 30% a.a.
+        P = np.zeros((1, n))
+        P[0, 1] = 1.0          # ETH é o segundo ativo (índice 1)
+        Q = np.array([0.30])
+        Omega = np.array([[1e-12]])   # incerteza ≈ 0 → visão certa
+
+        mu_bl = bl.combinar_views(P, Q, Omega)
+
+        assert abs(mu_bl["ETH"] - 0.30) < 1e-4, (
+            f"Com Omega≈0 (c=100%), posterior ETH deveria ser ≈ Q=0.30, "
+            f"mas foi {mu_bl['ETH']:.6f}"
+        )
+
+    def test_confianca_zero_posterior_igual_prior(self, bl):
+        """Omega ≈ ∞ (c→0%): posterior ≈ retornos de equilíbrio (Pi)."""
+        n = bl.n
+        # View com valor absurdo (vai ser ignorada)
+        P = np.zeros((1, n))
+        P[0, 0] = 1.0
+        Q = np.array([9.99])   # 999% a.a. — absurdo, deve ser ignorado
+        Omega = np.array([[1e12]])   # incerteza enorme → view ignorada
+
+        pi = bl.calcular_retornos_implicitos()
+        mu_bl = bl.combinar_views(P, Q, Omega)
+
+        for ativo in bl.ativos:
+            assert abs(mu_bl[ativo] - pi[ativo]) < 0.01, (
+                f"Com Omega≈∞ (c=0%), posterior de {ativo} deveria ser ≈ Pi="
+                f"{pi[ativo]:.4f}, mas foi {mu_bl[ativo]:.4f}"
+            )

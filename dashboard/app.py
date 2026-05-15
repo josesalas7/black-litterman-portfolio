@@ -12,16 +12,26 @@ Fluxo:
 """
 from __future__ import annotations
 
+import base64
 import logging
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+
+
+def _logo_b64() -> str:
+    p = ROOT / "assets" / "vault_logo.png"
+    return base64.b64encode(p.read_bytes()).decode() if p.exists() else ""
+
+
+_LOGO_B64 = _logo_b64()
 
 from src.black_litterman import BlackLitterman
 from src.config import (
@@ -42,6 +52,7 @@ from dashboard.utils_dash import (
     plot_pesos_comparacao,
     tabela_metricas_comparativa,
 )
+from src.backtest import backtest_rolante_bl
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -55,16 +66,267 @@ DIAS_BACKTEST = 90    # janela do mini-backtest
 # ─────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="BL Views Dashboard",
-    page_icon="📊",
+    page_title="Vault Capital — BL Portfolio",
+    page_icon="⬡",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("Black-Litterman — Inserção de Views em Tempo Real")
-st.caption(
-    "Insira uma opinião sobre um ativo na barra lateral e veja como ela "
-    "altera os pesos ótimos em relação ao equilíbrio de mercado."
+# ── CSS Vault Capital — Liquid Glass ─────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+    --vault-gold: #EECC2D;
+    --vault-gold-soft: rgba(238,204,45,0.10);
+    --vault-gold-hover: #F5D54A;
+    --bg-base: #0A0A0B;
+    --glass-bg: rgba(255,255,255,0.05);
+    --glass-bg-hover: rgba(255,255,255,0.08);
+    --glass-border: rgba(255,255,255,0.12);
+    --glass-highlight: rgba(255,255,255,0.14);
+    --border-accent: rgba(238,204,45,0.28);
+    --text-primary: #FAFAFA;
+    --text-secondary: rgba(250,250,250,0.6);
+    --text-muted: rgba(250,250,250,0.4);
+}
+
+html, body, [class*="css"] {
+    font-family: 'Inter', system-ui, sans-serif !important;
+}
+
+.stApp { background: #0A0A0B !important; }
+
+.main .block-container {
+    background-color: transparent !important;
+    padding: 2rem 3rem 4rem !important;
+    max-width: 1400px !important;
+}
+
+/* ── Ocultar botão de Deploy ──────────────────────────────── */
+[data-testid="stAppDeployButton"],
+.stDeployButton,
+[data-testid="stDeployButton"],
+[data-testid="stStatusWidget"],
+div[class*="deployButton"],
+div[class*="DeployButton"] { display: none !important; }
+
+/* ── Tipografia ───────────────────────────────────────────── */
+h1 {
+    color: var(--text-primary) !important;
+    font-weight: 700 !important;
+    font-size: 1.75rem !important;
+    letter-spacing: -0.02em !important;
+    margin-bottom: 0 !important;
+    line-height: 1.2 !important;
+}
+
+h2, h3 {
+    color: var(--text-secondary) !important;
+    font-weight: 500 !important;
+    font-size: 0.9rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    border-left: 2px solid var(--vault-gold) !important;
+    padding-left: 10px !important;
+    margin-top: 1.5rem !important;
+}
+
+/* ── Sidebar — Liquid Glass ───────────────────────────────── */
+section[data-testid="stSidebar"] {
+    background: rgba(255,255,255,0.07) !important;
+    backdrop-filter: blur(28px) saturate(160%) !important;
+    -webkit-backdrop-filter: blur(28px) saturate(160%) !important;
+}
+section[data-testid="stSidebar"] > div:first-child {
+    background-color: transparent !important;
+    border-right: 1px solid var(--glass-border) !important;
+    box-shadow: inset -1px 0 0 rgba(255,255,255,0.04) !important;
+}
+
+/* ── Métricas — Liquid Glass ──────────────────────────────── */
+div[data-testid="metric-container"] {
+    background: var(--glass-bg) !important;
+    backdrop-filter: blur(24px) saturate(160%) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(160%) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-top: 1px solid var(--border-accent) !important;
+    border-radius: 20px !important;
+    padding: 20px 24px !important;
+    box-shadow:
+        inset 0 1px 0 var(--glass-highlight),
+        0 4px 24px rgba(0,0,0,0.28),
+        0 1px 4px rgba(0,0,0,0.18) !important;
+    transition: all 0.25s ease-out !important;
+}
+div[data-testid="metric-container"]:hover {
+    background: var(--glass-bg-hover) !important;
+    box-shadow:
+        inset 0 1px 0 var(--glass-highlight),
+        0 8px 32px rgba(0,0,0,0.35),
+        0 2px 8px rgba(0,0,0,0.20) !important;
+    transform: translateY(-1px) !important;
+}
+div[data-testid="stMetricLabel"] p {
+    color: var(--text-muted) !important;
+    font-size: 0.7rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    font-weight: 500 !important;
+}
+div[data-testid="stMetricValue"] {
+    color: var(--vault-gold) !important;
+    font-weight: 600 !important;
+    font-size: 1.6rem !important;
+    letter-spacing: -0.02em !important;
+}
+div[data-testid="stMetricDelta"] svg { display: none; }
+div[data-testid="stMetricDelta"] > div {
+    color: var(--text-secondary) !important;
+    font-size: 0.78rem !important;
+}
+
+/* ── Botões ───────────────────────────────────────────────── */
+button[data-testid="baseButton-primary"] {
+    background: var(--vault-gold) !important;
+    color: #0A0A0B !important;
+    font-weight: 700 !important;
+    border: none !important;
+    border-radius: 10px !important;
+    letter-spacing: 0.02em !important;
+    box-shadow: 0 2px 12px rgba(238,204,45,0.22) !important;
+    transition: all 0.2s ease-out !important;
+}
+button[data-testid="baseButton-primary"]:hover {
+    background: var(--vault-gold-hover) !important;
+    box-shadow: 0 4px 20px rgba(238,204,45,0.32) !important;
+    transform: translateY(-1px) !important;
+}
+button[data-testid="baseButton-secondary"] {
+    background: rgba(255,255,255,0.06) !important;
+    backdrop-filter: blur(12px) !important;
+    color: var(--vault-gold) !important;
+    border: 1px solid rgba(238,204,45,0.22) !important;
+    border-radius: 10px !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10) !important;
+    transition: all 0.2s ease-out !important;
+}
+button[data-testid="baseButton-secondary"]:hover {
+    background: rgba(255,255,255,0.10) !important;
+    border: 1px solid rgba(238,204,45,0.38) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* ── Slider ───────────────────────────────────────────────── */
+div[data-testid="stSlider"] div[role="slider"] {
+    background-color: var(--vault-gold) !important;
+}
+div[data-testid="stSlider"] > div > div > div:first-child {
+    background-color: var(--vault-gold) !important;
+}
+
+/* ── Inputs — Liquid Glass ────────────────────────────────── */
+div[data-testid="stNumberInput"] input,
+div[data-testid="stTextInput"] input {
+    background: rgba(255,255,255,0.05) !important;
+    backdrop-filter: blur(12px) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 10px !important;
+    color: var(--text-primary) !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06) !important;
+    transition: border-color 0.2s ease-out, background 0.2s ease-out !important;
+}
+div[data-testid="stNumberInput"] input:focus,
+div[data-testid="stTextInput"] input:focus {
+    border: 1px solid rgba(238,204,45,0.4) !important;
+    background: rgba(255,255,255,0.07) !important;
+}
+div[data-testid="stSelectbox"] > div[data-baseweb="select"] > div {
+    background: rgba(255,255,255,0.05) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 10px !important;
+    backdrop-filter: blur(12px) !important;
+}
+
+/* ── Tabelas ──────────────────────────────────────────────── */
+div[data-testid="stDataFrame"] table thead th {
+    background: rgba(255,255,255,0.04) !important;
+    backdrop-filter: blur(12px) !important;
+    color: var(--text-muted) !important;
+    font-size: 0.7rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    border-bottom: 1px solid rgba(238,204,45,0.18) !important;
+    font-weight: 500 !important;
+}
+div[data-testid="stDataFrame"] table tbody tr:nth-child(even) {
+    background-color: rgba(255,255,255,0.02) !important;
+}
+
+/* ── Divisores ────────────────────────────────────────────── */
+hr {
+    border: none !important;
+    border-top: 1px solid rgba(255,255,255,0.07) !important;
+    margin: 1.5rem 0 !important;
+}
+
+/* ── Expanders — Liquid Glass ─────────────────────────────── */
+div[data-testid="stExpander"] {
+    background: rgba(255,255,255,0.04) !important;
+    backdrop-filter: blur(20px) saturate(150%) !important;
+    -webkit-backdrop-filter: blur(20px) saturate(150%) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 16px !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.08),
+        0 4px 20px rgba(0,0,0,0.22) !important;
+}
+
+/* ── Alerts — Liquid Glass ────────────────────────────────── */
+div[data-testid="stAlert"] {
+    background: rgba(255,255,255,0.05) !important;
+    backdrop-filter: blur(16px) saturate(140%) !important;
+    -webkit-backdrop-filter: blur(16px) saturate(140%) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 12px !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08) !important;
+}
+
+/* ── Captions ─────────────────────────────────────────────── */
+div[data-testid="stCaptionContainer"] p,
+p[data-testid="stCaption"] {
+    color: var(--text-muted) !important;
+    font-size: 0.78rem !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Cabeçalho Vault ───────────────────────────────────────────
+_logo_img = (
+    f'<img src="data:image/png;base64,{_LOGO_B64}" '
+    'style="height:32px;margin-right:14px;vertical-align:middle;flex-shrink:0;">'
+    if _LOGO_B64 else ""
+)
+st.markdown(
+    f"""
+<div style="display:flex;align-items:center;padding:0 0 20px 0;
+    border-bottom:1px solid rgba(238,204,45,0.3);margin-bottom:28px;">
+    {_logo_img}
+    <div>
+        <span style="color:rgba(250,250,250,0.4);font-size:0.68rem;font-weight:500;
+            letter-spacing:0.14em;text-transform:uppercase;display:block;margin-bottom:4px;">
+            VAULT CAPITAL</span>
+        <span style="color:#FAFAFA;font-size:1.6rem;font-weight:700;
+            letter-spacing:-0.02em;line-height:1.2;display:block;">
+            Black-Litterman Portfolio</span>
+        <span style="color:rgba(250,250,250,0.4);font-size:0.78rem;display:block;margin-top:6px;">
+            Insira uma opinião sobre um ativo na barra lateral e veja como ela
+            altera os pesos ótimos em relação ao equilíbrio de mercado.</span>
+    </div>
+</div>
+""",
+    unsafe_allow_html=True,
 )
 
 # ─────────────────────────────────────────────────────────────
@@ -134,6 +396,23 @@ def _janela_limpa(retornos: pd.DataFrame) -> pd.DataFrame:
     if excluidos:
         log.info("Ativos excluídos por histórico insuficiente: %s", excluidos)
     return limpa
+
+
+@st.cache_data(ttl=3600, show_spinner="Rodando backtest rolante BL (pode levar ~20s)...")
+def calcular_backtest_rolante(
+    _retornos: pd.DataFrame,
+    _market_caps: pd.Series,
+) -> dict:
+    """Backtest rolante BL neutro (sem views) — resultado cacheado 1h."""
+    return backtest_rolante_bl(
+        _retornos,
+        _market_caps,
+        janela=JANELA_SIGMA,
+        holding=30,
+        tau=TAU,
+        risk_aversion=RISK_AVERSION,
+        peso_maximo=PESO_MAXIMO,
+    )
 
 
 @st.cache_data(ttl=3600, show_spinner="Calculando equilíbrio de mercado...")
@@ -246,7 +525,11 @@ ativos_usados = resultado_benchmark["ativos_usados"]
 # ─────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.header("Nova View Absoluta")
+    st.markdown(
+        "<p style='color:#EECC2D;font-size:0.7rem;font-weight:600;letter-spacing:1.5px;"
+        "text-transform:uppercase;margin-bottom:4px;'>Nova View Absoluta</p>",
+        unsafe_allow_html=True,
+    )
     st.caption(
         "Expresse uma opinião sobre o retorno esperado de um ativo "
         "em um horizonte de tempo. O modelo ajustará os pesos ótimos "
@@ -295,13 +578,12 @@ with st.sidebar:
         ),
     )
 
-    # Conversão prévia para feedback imediato
+    # Conversão prévia: escalonamento linear (consistente com Σ anualizada × 365)
     r_periodo = retorno_pct / 100
-    r_diario  = (1 + r_periodo) ** (1 / max(horizonte_dias, 1)) - 1
-    r_anual   = (1 + r_diario) ** DIAS_ANO_CRIPTO - 1
+    r_anual   = r_periodo * (DIAS_ANO_CRIPTO / max(horizonte_dias, 1))
     st.caption(
         f"→ Equivale a **{r_anual * 100:.1f}% a.a.** "
-        f"({r_diario * 100:.3f}%/dia) — escala usada no modelo."
+        f"(escalonamento linear: {retorno_pct:.1f}% × 365/{horizonte_dias})"
     )
 
     st.divider()
@@ -469,6 +751,78 @@ try:
 
 except ValueError as exc:
     st.warning(f"Mini-backtest indisponível: {exc}")
+
+st.divider()
+
+# ── Bloco D: backtest rolante BL vs benchmark ──────────────
+
+st.subheader("Backtest Histórico — BL Rolante vs Benchmark")
+st.caption(
+    "BL em modo neutro (sem views do gestor), rebalanceado a cada 30 dias "
+    "com janela de treino de 365 dias. Benchmark: pesos de mercado fixos no "
+    "início do período (buy & hold do índice)."
+)
+
+try:
+    bt = calcular_backtest_rolante(retornos, market_caps)
+
+    eq_bl    = bt["equity_portfolio"]
+    eq_bench = bt["equity_benchmark"]
+
+    from dashboard.utils_dash import _VAULT_GOLD, _VAULT_BENCH, _VAULT_MUTED, _LAYOUT_BASE
+    fig_bt_rolante = go.Figure()
+    fig_bt_rolante.add_trace(go.Scatter(
+        x=eq_bl.index, y=eq_bl.round(2),
+        name="BL Rolante (neutro)",
+        mode="lines",
+        line=dict(color=_VAULT_GOLD, width=2.5),
+        hovertemplate="<b>BL Rolante</b><br>%{x|%d/%m/%Y}: %{y:.1f}<extra></extra>",
+    ))
+    fig_bt_rolante.add_trace(go.Scatter(
+        x=eq_bench.index, y=eq_bench.round(2),
+        name="Benchmark (market-cap B&H)",
+        mode="lines",
+        line=dict(color=_VAULT_BENCH, dash="dash", width=1.8),
+        hovertemplate="<b>Benchmark</b><br>%{x|%d/%m/%Y}: %{y:.1f}<extra></extra>",
+    ))
+    fig_bt_rolante.add_hline(y=100, line_dash="dot", line_color=_VAULT_MUTED, line_width=1, opacity=0.6)
+    _layout_rolante = dict(**_LAYOUT_BASE)
+    _layout_rolante.update(
+        title="Equity Curve — BL Rolante vs Benchmark (base 100)",
+        xaxis_title="Data",
+        yaxis_title="Equity (base 100)",
+        height=420,
+    )
+    fig_bt_rolante.update_layout(**_layout_rolante)
+    st.plotly_chart(fig_bt_rolante, use_container_width=True)
+
+    m_bl    = bt["metricas_portfolio"]
+    m_bench = bt["metricas_benchmark"]
+
+    nomes_metricas = {
+        "retorno_total_%":      "Retorno total (%)",
+        "retorno_anualizado_%": "Retorno anual. (%)",
+        "volatilidade_%":       "Vol anual. (%)",
+        "sharpe":               "Sharpe",
+        "max_drawdown_%":       "Max DD (%)",
+    }
+    rows_bt = {}
+    for chave, label in nomes_metricas.items():
+        rows_bt[label] = {
+            "BL Rolante":  m_bl.get(chave, float("nan")),
+            "Benchmark":   m_bench.get(chave, float("nan")),
+        }
+
+    df_metricas_bt = pd.DataFrame(rows_bt).T
+    st.dataframe(df_metricas_bt.style.format("{:.2f}"), use_container_width=True)
+
+    st.caption(
+        f"Período: {eq_bl.index[0].date()} → {eq_bl.index[-1].date()} | "
+        f"{bt['historico_pesos'].shape[0]} rebalanceamentos (holding=30d, janela=365d)"
+    )
+
+except Exception as exc:
+    st.warning(f"Backtest rolante indisponível: {exc}")
 
 # ── Rodapé ────────────────────────────────────────────────
 

@@ -340,3 +340,137 @@ class WalkForwardBacktest:
                 metricas.get("max_drawdown_%", float("nan")),
             )
         return resultados
+
+
+# ────────────────────────────────────────────────────────────
+# Backtest rolante standalone — independente da classe BL
+# ────────────────────────────────────────────────────────────
+
+def backtest_rolante_bl(
+    retornos: pd.DataFrame,
+    market_caps: pd.Series,
+    janela: int = 252,
+    holding: int = 30,
+    tau: float = 0.05,
+    risk_aversion: float = 2.5,
+    peso_maximo: float = 0.40,
+) -> dict:
+    """Backtest rolante do Black-Litterman em modo neutro (sem views).
+
+    For loop temporal: a cada t, pega janela [t-janela, t], roda BL sem views,
+    guarda os pesos, computa retorno para os próximos `holding` dias.
+    Benchmark: pesos de mercado fixos no início do período de teste (buy & hold).
+
+    Args:
+        retornos:      DataFrame de log-retornos diários (linhas=datas, colunas=ativos).
+        market_caps:   Series de market cap por ativo (para pesos de equilíbrio).
+        janela:        Tamanho da janela de treino em dias (default 252).
+        holding:       Número de dias entre rebalanceamentos (default 30).
+        tau:           Parâmetro τ do BL (default 0.05).
+        risk_aversion: λ do BL (default 2.5).
+        peso_maximo:   Limite superior por ativo na otimização (default 0.40).
+
+    Returns:
+        Dict com:
+            'historico_pesos':    DataFrame (datas_rebal × ativos)
+            'equity_portfolio':   Series equity curve BL (base 100)
+            'equity_benchmark':   Series equity curve benchmark (base 100)
+            'metricas_portfolio': dict de métricas do BL vs benchmark
+            'metricas_benchmark': dict de métricas do benchmark
+    """
+    from src.black_litterman import BlackLitterman  # import local evita ciclo
+    from src.portfolio_utils import metricas_equity_curve
+
+    retornos = retornos.sort_index()
+    todas_datas = retornos.index
+
+    if len(todas_datas) <= janela:
+        raise ValueError(
+            f"Série de retornos ({len(todas_datas)} dias) menor que janela ({janela})."
+        )
+
+    # Datas de rebalanceamento: início em todas_datas[janela], passo = holding
+    datas_rebal = todas_datas[janela::holding]
+
+    historico_pesos: dict[pd.Timestamp, pd.Series] = {}
+    lista_retornos_bl: list[pd.Series] = []
+
+    for data_t in datas_rebal:
+        # Janela de treino: [t-janela, t) — sem lookahead
+        treino = retornos[retornos.index < data_t].iloc[-janela:]
+        treino_limpo = treino.dropna(axis=1, how="any")
+
+        if treino_limpo.shape[1] == 0:
+            log.warning("Treino vazio em %s — pulando.", data_t.date())
+            continue
+
+        mc = market_caps.reindex(treino_limpo.columns).dropna()
+        ret_bl_ativos = treino_limpo[mc.index]
+
+        if ret_bl_ativos.shape[1] == 0:
+            log.warning("Nenhum ativo com market cap em %s — pulando.", data_t.date())
+            continue
+
+        try:
+            bl = BlackLitterman(ret_bl_ativos, mc, risk_aversion=risk_aversion, tau=tau)
+            resultado = bl.executar(peso_maximo=peso_maximo)
+            pesos = resultado["pesos_otimos"]
+        except Exception as exc:
+            log.warning("BL falhou em %s: %s — usando equal-weight.", data_t.date(), exc)
+            n = ret_bl_ativos.shape[1]
+            pesos = pd.Series(1.0 / n, index=ret_bl_ativos.columns)
+
+        historico_pesos[data_t] = pesos
+
+        # Retornos realizados no período de holding
+        idx = retornos.index.get_loc(data_t)
+        fim = min(idx + holding, len(retornos))
+        holding_ret = retornos.iloc[idx:fim]
+
+        ativos = holding_ret.columns.intersection(pesos.index)
+        p = pesos[ativos]
+        p = p / p.sum()
+        lista_retornos_bl.append((holding_ret[ativos] * p).sum(axis=1))
+
+    if not lista_retornos_bl:
+        raise RuntimeError("Nenhum retorno gerado no backtest rolante.")
+
+    ret_bl_serie = pd.concat(lista_retornos_bl).sort_index()
+    ret_bl_serie = ret_bl_serie[~ret_bl_serie.index.duplicated(keep="first")]
+
+    # Benchmark: market cap fixo no início do período de teste
+    data_inicio_teste = ret_bl_serie.index[0]
+    ret_periodo_teste = retornos[retornos.index >= data_inicio_teste]
+    ativos_bench = retornos.columns.intersection(market_caps.index)
+    mc_bench = market_caps[ativos_bench]
+    w_bench = mc_bench / mc_bench.sum()
+    ret_benchmark_serie = (ret_periodo_teste[ativos_bench] * w_bench).sum(axis=1)
+    ret_benchmark_serie = ret_benchmark_serie.reindex(ret_bl_serie.index).fillna(0)
+
+    equity_bl   = (1 + ret_bl_serie).cumprod() * 100
+    equity_bench = (1 + ret_benchmark_serie).cumprod() * 100
+
+    metricas_bl    = metricas_equity_curve(equity_bl,    benchmark=equity_bench)
+    metricas_bench = metricas_equity_curve(equity_bench)
+
+    log.info(
+        "Backtest rolante concluído: %d rebalanceamentos, %d dias de retorno. "
+        "BL: ret=%.1f%%, sharpe=%.2f | Benchmark: ret=%.1f%%, sharpe=%.2f",
+        len(historico_pesos),
+        len(ret_bl_serie),
+        metricas_bl.get("retorno_anualizado_%", float("nan")),
+        metricas_bl.get("sharpe", float("nan")),
+        metricas_bench.get("retorno_anualizado_%", float("nan")),
+        metricas_bench.get("sharpe", float("nan")),
+    )
+
+    df_pesos = pd.DataFrame(historico_pesos).T
+    df_pesos.index.name = "data_rebalanceamento"
+
+    return {
+        "historico_pesos":    df_pesos,
+        "equity_portfolio":   equity_bl,
+        "equity_benchmark":   equity_bench,
+        "metricas_portfolio": metricas_bl,
+        "metricas_benchmark": metricas_bench,
+    }

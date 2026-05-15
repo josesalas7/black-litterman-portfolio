@@ -137,15 +137,15 @@ def construir_view_absoluta(
     P[0, universo.index(ativo)] = 1.0
 
     retorno_periodo = retorno_pct / 100.0
-    retorno_diario  = (1.0 + retorno_periodo) ** (1.0 / horizonte_dias) - 1.0
-    retorno_anual   = (1.0 + retorno_diario) ** DIAS_ANO_CRIPTO - 1.0
+    # Escalonamento linear: consistente com Σ_anual = Σ_diaria × 365.
+    # Evita compounding geométrico explosivo em horizontes curtos.
+    retorno_anual = retorno_periodo * (DIAS_ANO_CRIPTO / horizonte_dias)
 
     Q = np.array([retorno_anual])
 
     log.info(
-        "View absoluta: %s %.2f%% em %dd → r_diario=%.4f%% → Q_anual=%.2f%%",
-        ativo, retorno_pct, horizonte_dias,
-        retorno_diario * 100, retorno_anual * 100,
+        "View absoluta: %s %.2f%% em %dd → Q_anual=%.2f%% (escalonamento linear)",
+        ativo, retorno_pct, horizonte_dias, retorno_anual * 100,
     )
     return P, Q
 
@@ -278,6 +278,43 @@ def tabela_metricas_comparativa(equity: pd.DataFrame) -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────────────────────────
+# Paleta Vault Capital
+# ─────────────────────────────────────────────────────────────
+_VAULT_GOLD   = "#EECC2D"
+_VAULT_BG     = "rgba(0,0,0,0)"            # fundo transparente
+_VAULT_CARD   = "rgba(0,0,0,0)"            # fundo transparente
+_VAULT_GRID   = "rgba(255,255,255,0.05)"   # grid bem suave
+_VAULT_MUTED  = "rgba(250,250,250,0.4)"
+_VAULT_BENCH  = "rgba(255,255,255,0.5)"    # benchmark: branco 50%
+_VAULT_EW     = "rgba(255,255,255,0.3)"
+
+_LAYOUT_BASE = dict(
+    paper_bgcolor=_VAULT_BG,
+    plot_bgcolor=_VAULT_CARD,
+    font=dict(family="Inter, system-ui, sans-serif", color="#FAFAFA", size=12),
+    title_font=dict(color=_VAULT_GOLD, size=13, family="Inter, system-ui, sans-serif"),
+    legend=dict(
+        orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+        bgcolor="rgba(0,0,0,0)", font=dict(size=11, color="rgba(250,250,250,0.7)"),
+    ),
+    margin=dict(t=80, l=50, r=20, b=50),
+    xaxis=dict(
+        gridcolor=_VAULT_GRID,
+        linecolor="rgba(255,255,255,0.08)",
+        tickfont=dict(size=11, color="rgba(250,250,250,0.6)"),
+        showgrid=True,
+    ),
+    yaxis=dict(
+        gridcolor=_VAULT_GRID,
+        linecolor="rgba(255,255,255,0.08)",
+        tickfont=dict(size=11, color="rgba(250,250,250,0.6)"),
+        showgrid=True,
+    ),
+    hovermode="x unified",
+)
+
+
+# ─────────────────────────────────────────────────────────────
 # 5. Gráficos Plotly
 # ─────────────────────────────────────────────────────────────
 
@@ -286,16 +323,7 @@ def plot_pesos_comparacao(
     w_bl: pd.Series,
     titulo: str = "Pesos do Portfólio",
 ) -> go.Figure:
-    """Barras agrupadas: market-cap (cinza) vs BL com view (azul).
-
-    Args:
-        w_mkt:  Pesos market-cap (benchmark).
-        w_bl:   Pesos BL com view (posterior).
-        titulo: Título do gráfico.
-
-    Returns:
-        Figura Plotly com barras agrupadas.
-    """
+    """Barras agrupadas: market-cap (cinza) vs BL (dourado Vault)."""
     ativos = list(w_mkt.index)
     pct_mkt = (w_mkt * 100).values
     pct_bl  = (w_bl.reindex(ativos).fillna(0) * 100).values
@@ -312,54 +340,69 @@ def plot_pesos_comparacao(
         name="Market-Cap (benchmark)",
         x=ativos,
         y=pct_mkt,
-        marker_color="lightgray",
-        marker_line_color="gray",
+        marker_color="rgba(255,255,255,0.12)",
+        marker_line_color="rgba(255,255,255,0.08)",
         marker_line_width=1,
         hovertemplate="%{x}: %{y:.2f}%<extra>Market-Cap</extra>",
     ))
 
     fig.add_trace(go.Bar(
-        name="BL com view",
+        name="BL otimizado",
         x=ativos,
         y=pct_bl,
-        marker_color="steelblue",
-        marker_line_color="navy",
+        marker_color=_VAULT_GOLD,
+        marker_line_color="rgba(238,204,45,0.5)",
         marker_line_width=1,
         customdata=hover_bl,
         hovertemplate="%{customdata}<extra>BL</extra>",
     ))
 
-    fig.update_layout(
+    layout = dict(**_LAYOUT_BASE)
+    layout.update(
         title=titulo,
         xaxis_title="Ativo",
         yaxis_title="Peso (%)",
         barmode="group",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         height=420,
-        margin=dict(t=80),
-        plot_bgcolor="white",
-        yaxis=dict(gridcolor="#eee"),
     )
+    fig.update_layout(**layout)
     return fig
+
+
+def omega_padrao(
+    P: np.ndarray,
+    Sigma: np.ndarray,
+    tau: float,
+) -> np.ndarray:
+    """Omega simplificado: diag(P · (tau · Sigma) · Pᵀ).
+
+    Incerteza de cada view escala com a variância dos ativos envolvidos.
+    Não depende de uma estimativa explícita de confiança — útil para
+    o backtest rolante onde não há input do gestor.
+
+    Args:
+        P:     Matriz de views (k × n).
+        Sigma: Covariância anualizada (n × n).
+        tau:   Parâmetro τ do BL.
+
+    Returns:
+        Matriz diagonal Ω (k × k).
+    """
+    k = P.shape[0]
+    base = tau * Sigma
+    omega_diag = np.array([float(P[i] @ base @ P[i]) for i in range(k)])
+    return np.diag(omega_diag)
 
 
 def plot_mini_backtest(
     equity: pd.DataFrame,
     titulo: str = "Mini-backtest",
 ) -> go.Figure:
-    """Equity curves das três estratégias do mini-backtest.
-
-    Args:
-        equity: DataFrame com colunas BL_com_view, Sem_view, EW (base 100).
-        titulo: Título do gráfico (inclui o período por convenção).
-
-    Returns:
-        Figura Plotly com linhas.
-    """
+    """Equity curves das três estratégias do mini-backtest (paleta Vault)."""
     estilos = {
-        "BL_com_view": dict(color="steelblue",  dash="solid", width=2.5),
-        "Sem_view":    dict(color="#888888",     dash="dash",  width=1.8),
-        "EW":          dict(color="seagreen",    dash="dot",   width=1.8),
+        "BL_com_view": dict(color=_VAULT_GOLD,  dash="solid", width=2.5),
+        "Sem_view":    dict(color=_VAULT_BENCH,  dash="dash",  width=1.8),
+        "EW":          dict(color=_VAULT_EW,     dash="dot",   width=1.8),
     }
     nomes = {
         "BL_com_view": "BL com view",
@@ -369,7 +412,7 @@ def plot_mini_backtest(
 
     fig = go.Figure()
     for col in equity.columns:
-        est  = estilos.get(col, dict(color="black", dash="solid", width=1))
+        est  = estilos.get(col, dict(color=_VAULT_MUTED, dash="solid", width=1))
         nome = nomes.get(col, col)
         fig.add_trace(go.Scatter(
             x=equity.index,
@@ -380,18 +423,9 @@ def plot_mini_backtest(
             hovertemplate=f"<b>{nome}</b><br>%{{x|%d/%m/%Y}}: %{{y:.1f}}<extra></extra>",
         ))
 
-    fig.add_hline(y=100, line_dash="dot", line_color="black", line_width=0.8, opacity=0.4)
+    fig.add_hline(y=100, line_dash="dot", line_color=_VAULT_MUTED, line_width=1, opacity=0.6)
 
-    fig.update_layout(
-        title=titulo,
-        xaxis_title="Data",
-        yaxis_title="Equity (base 100)",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        height=420,
-        margin=dict(t=80),
-        hovermode="x unified",
-        plot_bgcolor="white",
-        xaxis=dict(gridcolor="#eee"),
-        yaxis=dict(gridcolor="#eee"),
-    )
+    layout = dict(**_LAYOUT_BASE)
+    layout.update(title=titulo, xaxis_title="Data", yaxis_title="Equity (base 100)", height=420)
+    fig.update_layout(**layout)
     return fig

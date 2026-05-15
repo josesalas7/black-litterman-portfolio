@@ -207,6 +207,58 @@ def estatisticas_portfolio(retornos_portfolio: pd.Series) -> dict:
     }
 
 
+def metricas_equity_curve(
+    equity: pd.Series,
+    benchmark: pd.Series | None = None,
+) -> dict:
+    """Métricas de risco/retorno a partir de uma equity curve (base 100).
+
+    Args:
+        equity:    Series com equity curve indexada por data (começa em 100).
+        benchmark: Series opcional com equity curve do benchmark (mesma base).
+
+    Returns:
+        Dict com retorno_total_%, retorno_anualizado_%, volatilidade_%,
+        sharpe, max_drawdown_%, e — se benchmark fornecido — alpha e beta.
+    """
+    ret = equity.pct_change().dropna()
+    n = len(ret)
+    if n == 0:
+        return {}
+
+    ret_anual = ret.mean() * DIAS_ANO_CRIPTO
+    vol_anual = ret.std() * np.sqrt(DIAS_ANO_CRIPTO)
+    sharpe = ret_anual / vol_anual if vol_anual > 0 else np.nan
+
+    cum   = (1 + ret).cumprod()
+    pico  = cum.cummax()
+    max_dd = float(((cum - pico) / pico).min())
+
+    ret_total = float(equity.iloc[-1] / equity.iloc[0] - 1)
+
+    resultado = {
+        "retorno_total_%":      round(ret_total  * 100, 2),
+        "retorno_anualizado_%": round(ret_anual  * 100, 2),
+        "volatilidade_%":       round(vol_anual  * 100, 2),
+        "sharpe":               round(sharpe,       4) if not np.isnan(sharpe) else float("nan"),
+        "max_drawdown_%":       round(max_dd     * 100, 2),
+        "n_dias":               n,
+    }
+
+    if benchmark is not None:
+        ret_b = benchmark.pct_change().dropna()
+        ret_b = ret_b.reindex(ret.index).dropna()
+        ret_alinhado = ret.reindex(ret_b.index).dropna()
+        if len(ret_b) > 1:
+            cov_matrix = np.cov(ret_alinhado.values, ret_b.values)
+            beta  = cov_matrix[0, 1] / cov_matrix[1, 1] if cov_matrix[1, 1] > 0 else np.nan
+            alpha = (ret_alinhado.mean() - beta * ret_b.mean()) * DIAS_ANO_CRIPTO
+            resultado["beta"]      = round(float(beta),  4)
+            resultado["alpha_%"]   = round(float(alpha) * 100, 2)
+
+    return resultado
+
+
 def aplicar_pesos(
     retornos: pd.DataFrame,
     pesos: pd.Series,

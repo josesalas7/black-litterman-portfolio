@@ -8,7 +8,22 @@
       "Bash(Remove-Item \"c:\\\\Users\\\\joses\\\\Documents\\\\black-litterman-portfolio\\\\README copy.md\" -Force)",
       "Bash(Write-Host \"done\")",
       "Bash(.venv\\\\Scripts\\\\pip.exe freeze *)",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\joses\\\\Documents\\\\black-litterman-portfolio\" -Recurse)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Sort-Object)",
+      "Bash(python -c \"from src.black_litterman import BlackLitterman; print\\('BL OK'\\)\")",
+      "Bash(python -c \"from src import BlackLitterman, backtest_rolante_bl; print\\('src exports OK'\\)\")",
+      "Bash(python -m pytest tests/test_black_litterman.py -v)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('src/portfolio_utils.py', doraise=True\\); print\\('syntax OK'\\)\")",
+      "Bash(python -c \"from src.portfolio_utils import metricas_equity_curve; print\\('import OK'\\)\")",
+      "Bash(python -c \"from src.backtest import backtest_rolante_bl; print\\('backtest import OK'\\)\")",
+      "Bash(python -c \"import sys; sys.path.insert\\(0,'.'\\); import dashboard.app; print\\('dashboard OK'\\)\")",
+      "Bash(python -c \"import inspect, src.portfolio_utils as m; print\\([x for x in dir\\(m\\) if not x.startswith\\('_'\\)]\\)\")",
+      "Bash(python -c \"from src.backtest import backtest_rolante_bl; print\\('OK'\\)\")",
+      "Bash(python -c \"from dashboard.utils_dash import plot_pesos_comparacao, plot_mini_backtest, _VAULT_GOLD; print\\('utils_dash OK, gold =', _VAULT_GOLD\\)\")"
     ]
   }
 }

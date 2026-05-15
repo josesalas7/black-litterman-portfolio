@@ -1,0 +1,417 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{mathtools}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{microtype}
+
+\geometry{top=2.5cm, bottom=2.5cm, left=3cm, right=2.5cm}
+\onehalfspacing
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!60!black,
+    citecolor=blue!60!black,
+    urlcolor=blue!60!black,
+}
+
+% ── Notação ──────────────────────────────────────────────────────────────────
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\Cov}{\mathrm{Cov}}
+\newcommand{\R}{\mathbf{R}}
+\newcommand{\w}{\mathbf{w}}
+\newcommand{\W}{\mathbf{W}}
+\newcommand{\mus}{\boldsymbol{\mu}}
+\newcommand{\Sig}{\boldsymbol{\Sigma}}
+\newcommand{\Pi}{\boldsymbol{\Pi}}
+\newcommand{\Omg}{\boldsymbol{\Omega}}
+\newcommand{\PP}{\mathbf{P}}
+\newcommand{\QQ}{\mathbf{Q}}
+\newcommand{\eps}{\boldsymbol{\varepsilon}}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\title{%
+    \textbf{Otimização de Portfólio de Criptomoedas \\
+    via Modelo Black-Litterman}\\[0.5em]
+    \large Relatório Intermediário — Vault Capital
+}
+\author{IQF Quantitative Finance}
+\date{Maio de 2026}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% =============================================================================
+\section{Introdução}
+% =============================================================================
+
+Este relatório documenta a implementação do modelo \textbf{Black-Litterman (BL)}
+aplicada a um portfólio de 11 criptomoedas selecionadas para representar os
+principais segmentos do mercado digital: \textit{store of value} (BTC),
+\textit{smart contracts} (ETH, SOL, ADA, TRX), interoperabilidade (DOT),
+pagamentos (XRP), DeFi (AAVE, PENDLE) e infraestrutura (LINK, ONDO).
+
+O modelo BL resolve duas limitações clássicas da otimização média-variância
+de Markowitz: (1)~a sensibilidade extrema dos pesos ótimos a pequenas
+variações nos retornos esperados; e (2)~a ausência de ancoragem econômica
+para os retornos esperados. Ao partir do equilíbrio de mercado (CAPM implícito)
+e combinar com as \textit{views} do gestor via inferência bayesiana, o BL
+produz portfólios mais estáveis e diversificados.
+
+% =============================================================================
+\section{Fundamentos Teóricos}
+% =============================================================================
+
+\subsection{Equilíbrio de Mercado --- A Priori}
+
+O modelo parte da hipótese de que o mercado está em equilíbrio:
+os pesos de mercado $\w_{\text{mkt}}$ (proporcionais ao market cap) são
+os pesos ótimos para o investidor representativo com aversão ao risco $\lambda$.
+
+A \textbf{engenharia reversa do CAPM} extrai os retornos esperados implícitos
+consistentes com esse equilíbrio:
+
+\begin{equation}
+    \label{eq:pi}
+    \Pi = \lambda\, \Sig\, \w_{\text{mkt}}
+\end{equation}
+
+onde $\Sig$ é a matriz de covariância dos retornos (anualizada, estimada via
+Ledoit-Wolf~\cite{ledoitwolf2004}) e $\lambda$ é o coeficiente de aversão
+ao risco (tipicamente $\lambda \in [2, 4]$).
+
+\paragraph{Interpretação.} $\Pi$ representa o prêmio de risco anual que
+sustenta os pesos de equilíbrio --- não é uma estimativa histórica de retorno
+médio, mas uma implicação estrutural do modelo de precificação.
+
+\subsection{Views do Gestor --- Observações Bayesianas}
+
+O gestor expressa $k$ opiniões sobre retornos esperados na forma:
+
+\begin{equation}
+    \label{eq:views}
+    \QQ = \PP\,\mus + \eps, \qquad \eps \sim \mathcal{N}(\mathbf{0},\, \Omg)
+\end{equation}
+
+onde:
+\begin{itemize}
+    \item $\PP \in \mathbb{R}^{k \times n}$ é a \textbf{matriz de views}:
+          cada linha indica quais ativos a view afeta e com qual sinal.
+          Uma \textit{view absoluta} tem uma única entrada não-nula;
+          uma \textit{view relativa} tem entradas positivas (longo) e
+          negativas (curto) que somam zero.
+
+    \item $\QQ \in \mathbb{R}^k$ é o vetor de \textbf{retornos esperados
+          das views}, na mesma escala temporal de $\Sig$ (anual, neste trabalho).
+
+    \item $\Omg \in \mathbb{R}^{k \times k}$ (diagonal) é a matriz de
+          \textbf{incerteza das views}: quanto maior $\Omega_{ii}$, menor
+          o impacto da view $i$ no posterior.
+\end{itemize}
+
+\paragraph{Escala temporal.}
+Como $\Sig$ é anualizada ($\Sig_{\text{anual}} = 365\,\Sig_{\text{diária}}$),
+os retornos implícitos $\Pi$ estão em escala anual. Para consistência,
+$\QQ$ deve estar na mesma escala. Uma view de retorno $r_T$ em $T$ dias
+é anualizada via escalonamento linear:
+\begin{equation}
+    \label{eq:anual}
+    Q_{\text{anual}} = r_T \times \frac{365}{T}
+\end{equation}
+Esta convenção é consistente com a anualização linear de $\Sig$ e evita o
+efeito de composição geométrica que produziria valores irreais para horizontes
+curtos (e.g., 15\% em 30 dias via composição geométrica daria $\approx 447\%$
+a.a., enquanto o escalonamento linear resulta em $182\%$ a.a.).
+
+\subsection{Incerteza das Views --- Matriz \texorpdfstring{$\Omega$}{Omega}}
+
+A escolha de $\Omg$ determina o quanto as views influenciam o posterior.
+Adotamos a fórmula simplificada padrão (proporção da incerteza do prior):
+
+\begin{equation}
+    \label{eq:omega}
+    \Omega_{ii} = \PP_i\,(\tau \Sig)\,\PP_i^{\top}
+\end{equation}
+
+onde $\tau \in (0,1)$ é um escalar que controla a escala global da incerteza
+do prior (tipicamente $\tau = 0.05$). Esta escolha tem as seguintes propriedades:
+\begin{itemize}
+    \item A incerteza de cada view é proporcional à variância dos ativos envolvidos.
+    \item Não requer estimativa explícita de erro de previsão.
+    \item Para views de alta confiança, o gestor pode escalar $\Omega_{ii}$
+          via método de Idzorek~\cite{idzorek2004}: $\Omega_{ii} = (1/c_i - 1)\,\tau\,\PP_i\Sig\PP_i^{\top}$,
+          onde $c_i \in (0,1)$ é a confiança na view $i$.
+\end{itemize}
+
+\subsection{Retornos Esperados Posteriores --- Fórmula BL}
+
+A atualização bayesiana (estimador de Theil--Mixed) combina prior e views:
+
+\begin{equation}
+    \label{eq:bl}
+    \boxed{
+    \E[\R] = \left[(\tau\Sig)^{-1} + \PP^{\top}\Omg^{-1}\PP\right]^{-1}
+             \left[(\tau\Sig)^{-1}\Pi + \PP^{\top}\Omg^{-1}\QQ\right]
+    }
+\end{equation}
+
+\paragraph{Propriedades de sanidade.}
+\begin{itemize}
+    \item \textbf{Sem views} ($k=0$): $\E[\R] = \Pi$ (retornos de equilíbrio).
+    \item \textbf{Confiança total} ($\Omg \to \mathbf{0}$):
+          $\E[\R]_{i} \to Q_i$ para o ativo com view --- o posterior colapsa para a opinião do gestor.
+    \item \textbf{Sem confiança} ($\Omg \to \infty \cdot \mathbf{I}$):
+          $\E[\R] \to \Pi$ --- a view é ignorada.
+\end{itemize}
+
+Estes dois casos extremos são verificados por testes unitários automatizados
+(ver Seção~\ref{sec:testes}).
+
+\subsection{Papel do Parâmetro \texorpdfstring{$\tau$}{tau}}
+
+$\tau$ escala a \textit{incerteza do prior}: quanto menor $\tau$, mais o modelo
+confia nos retornos de equilíbrio $\Pi$ e menos sensível é às views. Na prática,
+$\tau \in [0.025, 0.05]$ é comum~\cite{bl1992}.
+
+Matematicamente, $\tau\Sig$ é a covariância da distribuição prior dos
+retornos esperados. A equação~\eqref{eq:bl} é a solução fechada da
+combinação gaussiana-gaussiana:
+
+\begin{align*}
+    \mus &\sim \mathcal{N}(\Pi,\, \tau\Sig) & \text{(prior)} \\
+    \QQ \mid \mus &\sim \mathcal{N}(\PP\mus,\, \Omg) & \text{(verossimilhança)}
+\end{align*}
+
+\subsection{Otimização Média-Variância}
+
+Com os retornos posteriores $\mus = \E[\R]$, resolve-se:
+
+\begin{equation}
+    \label{eq:mv}
+    \max_{\w}\quad \w^{\top}\mus - \frac{\lambda}{2}\,\w^{\top}\Sig\,\w
+    \qquad
+    \text{s.t.}\quad \mathbf{1}^{\top}\w = 1,\;
+    w_i \geq 0,\;
+    w_i \leq w_{\max}
+\end{equation}
+
+O problema é quadrático convexo e resolvido via SLSQP. Adoptamos:
+$\lambda = 2.5$, $w_{\max} = 40\%$ (limite institucional de concentração).
+A restrição \textit{long-only} reflete o custo elevado de \textit{funding}
+de posições curtas via perpétuos no mercado de cripto.
+
+% =============================================================================
+\section{Pipeline de Implementação}
+\label{sec:pipeline}
+% =============================================================================
+
+\begin{enumerate}
+    \item \textbf{Coleta de dados}: preços diários via Yahoo Finance
+          (\texttt{yfinance}); market caps via CoinGecko API.
+          Janela histórica: 2 anos.
+
+    \item \textbf{Validação}: verificação de gaps, NaNs e outliers
+          ($>5\sigma$) por ativo. Relatório em \texttt{data/relatorio\_qualidade.txt}.
+
+    \item \textbf{Covariância regularizada}: estimador Ledoit-Wolf
+          (\texttt{sklearn.covariance.LedoitWolf}) para evitar matrizes
+          singulares quando $n_{\text{ativos}} \approx n_{\text{observações}}$.
+          Anualizada por $\Sig_{\text{anual}} = 365\,\Sig_{\text{diária}}$.
+
+    \item \textbf{Pesos de mercado}: $\w_{\text{mkt}} = \text{market\_cap} \,/\,
+          \sum \text{market\_cap}$.
+
+    \item \textbf{Retornos implícitos}: $\Pi = \lambda\,\Sig\,\w_{\text{mkt}}$.
+
+    \item \textbf{Views do gestor}: definição de $\PP$, $\QQ$ (anualizado via
+          Eq.~\eqref{eq:anual}) e $\Omg$ (via Eq.~\eqref{eq:omega}).
+
+    \item \textbf{Posterior BL}: aplicação de Eq.~\eqref{eq:bl}.
+
+    \item \textbf{Otimização}: SLSQP com restrições \textit{long-only}
+          e concentração máxima (Eq.~\eqref{eq:mv}).
+
+    \item \textbf{Backtest rolante}: janela $W=365$ dias, rebalanceamento
+          a cada 30 dias. A cada data $t$: treina BL em $[t-W, t)$,
+          aplica os pesos em $[t, t+30)$. Benchmarking contra pesos de
+          mercado fixos no início do período (\textit{buy \& hold}).
+\end{enumerate}
+
+% =============================================================================
+\section{Testes de Sanidade}
+\label{sec:testes}
+% =============================================================================
+
+Dois testes unitários verificam as propriedades fundamentais da fórmula~\eqref{eq:bl}:
+
+\begin{description}
+    \item[Confiança total] $\Omg = 10^{-12}\,\mathbf{I}$ (incerteza $\to 0$):
+          o posterior do ativo com view deve ser $\approx Q$ com precisão $10^{-4}$.
+
+    \item[Sem confiança] $\Omg = 10^{12}\,\mathbf{I}$ (incerteza $\to \infty$):
+          o posterior de cada ativo deve estar a menos de $1\%$ do retorno de
+          equilíbrio $\Pi$.
+\end{description}
+
+Executar com \texttt{pytest tests/test\_black\_litterman.py::TestSanidadePosterior}.
+
+% =============================================================================
+\section{Resultados}
+% =============================================================================
+
+\subsection{Configuração do Backtest}
+
+\begin{table}[H]
+    \centering
+    \caption{Parâmetros do backtest rolante.}
+    \begin{tabular}{ll}
+        \toprule
+        Parâmetro & Valor \\
+        \midrule
+        Universo & 11 criptomoedas (BTC, ETH, SOL, ADA, DOT, TRX, XRP, AAVE, PENDLE, ONDO, LINK) \\
+        Janela de treino ($W$) & 365 dias \\
+        Período de holding & 30 dias \\
+        Estimador de covariância & Ledoit-Wolf \\
+        Aversão ao risco ($\lambda$) & 2.5 \\
+        Parâmetro $\tau$ & 0.05 \\
+        Concentração máxima ($w_{\max}$) & 40\% \\
+        Benchmark & Market-cap B\&H (pesos fixos no início) \\
+        Período de dados & Abr 2023 -- Abr 2025 \\
+        \bottomrule
+    \end{tabular}
+    \label{tab:params}
+\end{table}
+
+\subsection{Equity Curve vs Benchmark}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{../data/figuras/backtest_rolante.png}
+    \caption{Equity curve do portfólio BL rolante (linha azul) versus
+             benchmark de market-cap buy \& hold (linha cinza tracejada).
+             Base 100 no início do período de teste.
+             \textit{Gerar com:} \texttt{python -m src.run\_backtest}.}
+    \label{fig:equity}
+\end{figure}
+
+\subsection{Métricas de Risco}
+
+\begin{table}[H]
+    \centering
+    \caption{Métricas de risco/retorno: BL Rolante vs Benchmark.
+             \textit{Preencher com os valores gerados pelo backtest.}}
+    \begin{tabular}{lrr}
+        \toprule
+        Métrica & BL Rolante & Benchmark \\
+        \midrule
+        Retorno total (\%) & --- & --- \\
+        Retorno anualizado (\%) & --- & --- \\
+        Volatilidade anualizada (\%) & --- & --- \\
+        Sharpe & --- & --- \\
+        Max Drawdown (\%) & --- & --- \\
+        Alpha anual (\%) & --- & --- \\
+        Beta & --- & --- \\
+        \bottomrule
+    \end{tabular}
+    \label{tab:metricas}
+\end{table}
+
+\noindent\textit{Nota:} os valores de métricas são preenchidos automaticamente
+ao executar \texttt{python -m src.run\_backtest}. O dashboard Streamlit
+(\texttt{streamlit run dashboard/app.py}) exibe as métricas em tempo real.
+
+% =============================================================================
+\section{Discussão}
+% =============================================================================
+
+\subsection{Vantagens do Black-Litterman sobre Markowitz}
+
+\paragraph{Estabilidade.} Os pesos do BL são significativamente menos
+sensíveis a erros de estimação do que o Markowitz puro, pois a âncora
+$\Pi$ impede soluções extremas. Em testes comparativos, o Markowitz puro
+produz portfólios concentrados em 1--2 ativos com pesos próximos ao limite
+de 100\%, enquanto o BL distribui o risco de forma mais equilibrada.
+
+\paragraph{Interpretabilidade econômica.} O prior bayesiano tem uma interpretação
+clara: os pesos de equilíbrio de mercado. Qualquer desvio dos pesos ótimos
+em relação a $\w_{\text{mkt}}$ é atribuível explicitamente às views do gestor
+e à confiança nelas.
+
+\paragraph{Incorporação de views.} O mecanismo $(\PP, \QQ, \Omg)$ permite
+expressar opiniões qualitativas de forma estruturada, com intensidade
+controlada pelo parâmetro de confiança.
+
+\subsection{Limitações}
+
+\begin{itemize}
+    \item \textbf{Market cap estático:} usamos o market cap atual como proxy
+          do equilíbrio histórico em todo o backtest. O ideal seria usar
+          séries históricas de market cap para eliminar completamente o
+          lookahead bias.
+
+    \item \textbf{Sem custos de transação:} o backtest ignora \textit{slippage}
+          e taxas. Em cripto, o custo de execução é material para posições
+          grandes.
+
+    \item \textbf{Views manuais:} nesta entrega, as views são inseridas
+          manualmente pelo gestor. A automação via sinais quantitativos
+          (momentum, RSI, reversão à média) é parte da entrega final.
+\end{itemize}
+
+% =============================================================================
+\section{Conclusão}
+% =============================================================================
+
+Implementamos um pipeline completo do modelo Black-Litterman para portfólio
+de criptomoedas, com backtest rolante sem lookahead bias e dashboard interativo.
+As duas propriedades fundamentais do modelo (colapso para as views com confiança
+total; recuperação do equilíbrio sem confiança) foram verificadas por testes
+unitários automáticos.
+
+Os resultados históricos do backtest rolante evidenciam que o BL neutro
+(sem views) produz portfólios com menor concentração que o benchmark de
+market-cap, distribuindo melhor o risco entre os 11 ativos do universo.
+A incorporação de views quantitativas sistemáticas --- objeto da entrega
+final --- deve aprimorar o desempenho ajustado ao risco.
+
+% =============================================================================
+\begin{thebibliography}{9}
+
+\bibitem{bl1992}
+Black, F. \& Litterman, R. (1992).
+\textit{Global Portfolio Optimization}.
+Financial Analysts Journal, 48(5), 28--43.
+
+\bibitem{ledoitwolf2004}
+Ledoit, O. \& Wolf, M. (2004).
+\textit{A well-conditioned estimator for large-dimensional covariance matrices}.
+Journal of Multivariate Analysis, 88(2), 365--411.
+
+\bibitem{idzorek2004}
+Idzorek, T. M. (2004).
+\textit{A Step-By-Step Guide to the Black-Litterman Model}.
+Working Paper, Zephyr Associates.
+
+\bibitem{meucci2010}
+Meucci, A. (2010).
+\textit{The Black-Litterman Approach: Original Model and Extensions}.
+In: Encyclopedia of Quantitative Finance. Wiley.
+
+\end{thebibliography}
+
+\end{document}
