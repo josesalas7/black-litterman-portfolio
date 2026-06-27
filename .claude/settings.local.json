@@ -23,7 +23,13 @@
       "Bash(python -c \"import sys; sys.path.insert\\(0,'.'\\); import dashboard.app; print\\('dashboard OK'\\)\")",
       "Bash(python -c \"import inspect, src.portfolio_utils as m; print\\([x for x in dir\\(m\\) if not x.startswith\\('_'\\)]\\)\")",
       "Bash(python -c \"from src.backtest import backtest_rolante_bl; print\\('OK'\\)\")",
-      "Bash(python -c \"from dashboard.utils_dash import plot_pesos_comparacao, plot_mini_backtest, _VAULT_GOLD; print\\('utils_dash OK, gold =', _VAULT_GOLD\\)\")"
+      "Bash(python -c \"from dashboard.utils_dash import plot_pesos_comparacao, plot_mini_backtest, _VAULT_GOLD; print\\('utils_dash OK, gold =', _VAULT_GOLD\\)\")",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\joses\\\\Documents\\\\black-litterman-portfolio\" -Recurse -Force | Select-Object FullName, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}}, @{Name=\"Size\";Expression={if\\($_.PSIsContainer\\){\"-\"}else{$_.Length}}} | Sort-Object FullName | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\joses\\\\Documents\\\\black-litterman-portfolio\\\\src\" -File | Select-Object Name, @{Name=\"Size\\(bytes\\)\";Expression={$_.Length}} | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\joses\\\\Documents\\\\black-litterman-portfolio\\\\data\" -File | Select-Object Name, @{Name=\"Size\\(bytes\\)\";Expression={$_.Length}} | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\joses\\\\Documents\\\\black-litterman-portfolio\\\\data\\\\figuras\" -File 2>$null | Select-Object Name, @{Name=\"Size\\(bytes\\)\";Expression={$_.Length}} | Format-Table -AutoSize)",
+      "Bash(python -m src.run_backtest)",
+      "Bash(findstr /I \"CDI\\\\|BL-VAR\\\\|VAR\\\\|AR\\(1\\)\\\\|custo\\\\|turnover\\\\|CONCLUIDO\\\\|Backtest conf\\\\|Periodo\")"
     ]
   }
 }

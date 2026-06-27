@@ -268,18 +268,256 @@ def plotar_distribuicao_retornos(
 
 def tabela_metricas(
     resultados: dict[str, ResultadoBacktest],
+    cdi_diario: pd.Series | None = None,
 ) -> pd.DataFrame:
     """DataFrame comparativo com todas as métricas.
 
     Linhas = métricas, colunas = estratégias.
-    Pronto para .to_markdown() ou .style.
+    Sharpe/Sortino usam CDI se fornecido, caso contrário rf=0.
 
     Args:
         resultados: Dict {nome: ResultadoBacktest}.
+        cdi_diario: Taxa CDI diária (opcional) para métricas risk-adjusted.
 
     Returns:
         DataFrame com métricas comparativas.
     """
-    dados = {nome: res.metricas() for nome, res in resultados.items()}
+    dados = {nome: res.metricas(cdi_diario) for nome, res in resultados.items()}
     df = pd.DataFrame(dados)
     return df
+
+
+# ────────────────────────────────────────────────────────────
+# 7. Figura 3×1: equity, drawdown, vol rolante
+# ────────────────────────────────────────────────────────────
+
+def plotar_backtest_completo_3x1(
+    resultado_var: ResultadoBacktest,
+    resultado_benchmark: ResultadoBacktest,
+    janela_vol: int = 30,
+    salvar_em: Path | None = None,
+) -> plt.Figure:
+    """Figura 3×1 com equity curve (GROSS + NET), drawdown e vol rolante 30d.
+
+    Painéis:
+        (a) Equity curves: BL-VAR Gross, BL-VAR Net, Benchmark (BL Neutro)
+        (b) Drawdown das mesmas três séries
+        (c) Volatilidade rolante 30d anualizada
+
+    Args:
+        resultado_var: ResultadoBacktest da estratégia BL-VAR.
+        resultado_benchmark: ResultadoBacktest do benchmark (BL Neutro).
+        janela_vol: Janela para vol rolante em dias (padrão 30).
+        salvar_em: Caminho para salvar PNG (opcional).
+
+    Returns:
+        plt.Figure
+    """
+    ret_gross = resultado_var.retornos_diarios.dropna()
+    ret_net   = (resultado_var.retornos_net if resultado_var.retornos_net is not None
+                 else ret_gross).dropna()
+    ret_bench = resultado_benchmark.retornos_diarios.dropna()
+
+    eq_gross = (1 + ret_gross).cumprod()
+    eq_net   = (1 + ret_net).cumprod()
+    eq_bench = (1 + ret_bench).reindex(eq_gross.index).cumprod()
+
+    fig, axes = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
+    fig.patch.set_facecolor("white")
+
+    cores = {"gross": "#1f77b4", "net": "#ff7f0e", "bench": "#2ca02c"}
+
+    # (a) Equity curves
+    ax0 = axes[0]
+    ax0.plot(eq_gross.index, eq_gross.values, label="BL-VAR Gross",
+             color=cores["gross"], linewidth=1.6)
+    ax0.plot(eq_net.index, eq_net.values, label="BL-VAR Net",
+             color=cores["net"], linewidth=1.6, linestyle="--")
+    ax0.plot(eq_bench.index, eq_bench.values, label="BL Neutro (benchmark)",
+             color=cores["bench"], linewidth=1.4, linestyle=":")
+    ax0.axhline(1.0, color="black", linewidth=0.7, linestyle="-", alpha=0.3)
+    ax0.set_ylabel("Valor da carteira (base 1,0)")
+    ax0.set_title("Equity Curve — BL-VAR vs Benchmark", fontsize=12)
+    ax0.legend(fontsize=9)
+    ax0.set_facecolor("white")
+    ax0.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.2f}"))
+
+    # (b) Drawdown
+    ax1 = axes[1]
+    for ret, nome, cor in [
+        (ret_gross, "BL-VAR Gross", cores["gross"]),
+        (ret_net,   "BL-VAR Net",   cores["net"]),
+        (ret_bench, "BL Neutro",    cores["bench"]),
+    ]:
+        dd = _drawdown_serie(ret)
+        ax1.plot(dd.index, dd.values, label=nome, color=cor, linewidth=1.3)
+    ax1.fill_between(
+        _drawdown_serie(ret_net).index,
+        _drawdown_serie(ret_net).values,
+        0, alpha=0.15, color=cores["net"],
+    )
+    ax1.axhline(0, color="black", linewidth=0.7, alpha=0.3)
+    ax1.set_ylabel("Drawdown")
+    ax1.set_title("Drawdown", fontsize=12)
+    ax1.legend(fontsize=9)
+    ax1.set_facecolor("white")
+    ax1.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1, decimals=0))
+
+    # (c) Volatilidade rolante 30d
+    ax2 = axes[2]
+    for ret, nome, cor in [
+        (ret_gross, "BL-VAR Gross", cores["gross"]),
+        (ret_net,   "BL-VAR Net",   cores["net"]),
+        (ret_bench, "BL Neutro",    cores["bench"]),
+    ]:
+        vol_roll = ret.rolling(janela_vol).std() * np.sqrt(DIAS_ANO_CRIPTO)
+        ax2.plot(vol_roll.index, vol_roll.values, label=nome, color=cor, linewidth=1.3)
+    ax2.set_ylabel(f"Volatilidade rolante {janela_vol}d (anualizada)")
+    ax2.set_title(f"Volatilidade Rolante {janela_vol}d", fontsize=12)
+    ax2.set_xlabel("Data")
+    ax2.legend(fontsize=9)
+    ax2.set_facecolor("white")
+    ax2.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1, decimals=0))
+
+    fig.suptitle(
+        f"BL-VAR — Backtest Completo ({ret_gross.index[0].date()} → {ret_gross.index[-1].date()})",
+        fontsize=14, y=1.01,
+    )
+    plt.tight_layout()
+    _salvar(fig, salvar_em)
+    return fig
+
+
+def plotar_equity_curve_individual(
+    resultado_var: ResultadoBacktest,
+    resultado_benchmark: ResultadoBacktest,
+    salvar_em: Path | None = None,
+) -> plt.Figure:
+    """Equity curve individual: BL-VAR Gross, Net e Benchmark.
+
+    Args:
+        resultado_var: ResultadoBacktest da estratégia BL-VAR.
+        resultado_benchmark: ResultadoBacktest do benchmark.
+        salvar_em: Caminho para salvar PNG (opcional).
+
+    Returns:
+        plt.Figure
+    """
+    ret_gross = resultado_var.retornos_diarios.dropna()
+    ret_net   = (resultado_var.retornos_net if resultado_var.retornos_net is not None
+                 else ret_gross).dropna()
+    ret_bench = resultado_benchmark.retornos_diarios.dropna()
+
+    eq_gross = (1 + ret_gross).cumprod()
+    eq_net   = (1 + ret_net).cumprod()
+    eq_bench = (1 + ret_bench).reindex(eq_gross.index).cumprod()
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    ax.plot(eq_gross.index, eq_gross.values, label="BL-VAR Gross", linewidth=1.6, color="#1f77b4")
+    ax.plot(eq_net.index, eq_net.values, label="BL-VAR Net", linewidth=1.6,
+            linestyle="--", color="#ff7f0e")
+    ax.plot(eq_bench.index, eq_bench.values, label="BL Neutro (benchmark)", linewidth=1.4,
+            linestyle=":", color="#2ca02c")
+    ax.axhline(1.0, color="black", linewidth=0.7, linestyle="-", alpha=0.3)
+    ax.set_title("Equity Curve — BL-VAR vs Benchmark", fontsize=13)
+    ax.set_ylabel("Valor da carteira (base 1,0)")
+    ax.set_xlabel("Data")
+    ax.legend(fontsize=10)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.2f}"))
+    plt.tight_layout()
+    _salvar(fig, salvar_em)
+    return fig
+
+
+def plotar_drawdown_individual(
+    resultado_var: ResultadoBacktest,
+    resultado_benchmark: ResultadoBacktest,
+    salvar_em: Path | None = None,
+) -> plt.Figure:
+    """Drawdown individual: BL-VAR Gross, Net e Benchmark.
+
+    Args:
+        resultado_var: ResultadoBacktest da estratégia BL-VAR.
+        resultado_benchmark: ResultadoBacktest do benchmark.
+        salvar_em: Caminho para salvar PNG (opcional).
+
+    Returns:
+        plt.Figure
+    """
+    ret_gross = resultado_var.retornos_diarios.dropna()
+    ret_net   = (resultado_var.retornos_net if resultado_var.retornos_net is not None
+                 else ret_gross).dropna()
+    ret_bench = resultado_benchmark.retornos_diarios.dropna()
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    for ret, nome, cor in [
+        (ret_gross, "BL-VAR Gross", "#1f77b4"),
+        (ret_net,   "BL-VAR Net",   "#ff7f0e"),
+        (ret_bench, "BL Neutro",    "#2ca02c"),
+    ]:
+        dd = _drawdown_serie(ret)
+        ax.plot(dd.index, dd.values, label=nome, color=cor, linewidth=1.4)
+    ax.fill_between(
+        _drawdown_serie(ret_net).index,
+        _drawdown_serie(ret_net).values,
+        0, alpha=0.15, color="#ff7f0e",
+    )
+    ax.axhline(0, color="black", linewidth=0.7, alpha=0.3)
+    ax.set_title("Drawdown — BL-VAR vs Benchmark", fontsize=13)
+    ax.set_ylabel("Drawdown")
+    ax.set_xlabel("Data")
+    ax.legend(fontsize=10)
+    ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1, decimals=0))
+    plt.tight_layout()
+    _salvar(fig, salvar_em)
+    return fig
+
+
+def plotar_vol_rolante(
+    resultado_var: ResultadoBacktest,
+    resultado_benchmark: ResultadoBacktest,
+    janela_vol: int = 30,
+    salvar_em: Path | None = None,
+) -> plt.Figure:
+    """Volatilidade rolante 30d anualizada: BL-VAR Gross, Net e Benchmark.
+
+    Args:
+        resultado_var: ResultadoBacktest da estratégia BL-VAR.
+        resultado_benchmark: ResultadoBacktest do benchmark.
+        janela_vol: Janela em dias (padrão 30).
+        salvar_em: Caminho para salvar PNG (opcional).
+
+    Returns:
+        plt.Figure
+    """
+    ret_gross = resultado_var.retornos_diarios.dropna()
+    ret_net   = (resultado_var.retornos_net if resultado_var.retornos_net is not None
+                 else ret_gross).dropna()
+    ret_bench = resultado_benchmark.retornos_diarios.dropna()
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    for ret, nome, cor in [
+        (ret_gross, "BL-VAR Gross", "#1f77b4"),
+        (ret_net,   "BL-VAR Net",   "#ff7f0e"),
+        (ret_bench, "BL Neutro",    "#2ca02c"),
+    ]:
+        vol_roll = ret.rolling(janela_vol).std() * np.sqrt(DIAS_ANO_CRIPTO)
+        ax.plot(vol_roll.index, vol_roll.values, label=nome, color=cor, linewidth=1.4)
+
+    ax.set_title(f"Volatilidade Rolante {janela_vol}d (anualizada)", fontsize=13)
+    ax.set_ylabel(f"Vol {janela_vol}d anualizada")
+    ax.set_xlabel("Data")
+    ax.legend(fontsize=10)
+    ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1, decimals=0))
+    plt.tight_layout()
+    _salvar(fig, salvar_em)
+    return fig

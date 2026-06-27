@@ -30,7 +30,7 @@ from src.portfolio_utils import (
     calcular_matriz_covariancia_ledoitwolf,
     DIAS_ANO_CRIPTO,
 )
-from src.views import gerar_views_rsi, gerar_views_momentum
+from src.views import gerar_views_rsi, gerar_views_momentum, gerar_views_var
 
 log = logging.getLogger(__name__)
 
@@ -505,5 +505,81 @@ class BlackLittermanCombinado(EstrategiaBase):
         pesos = bl.executar(
             P=P_final, Q=Q_final, Omega=Om_final, peso_maximo=self.peso_maximo
         )["pesos_otimos"]
+        log.info("[%s] Pesos calculados.", self.nome)
+        return pesos
+
+
+# ────────────────────────────────────────────────────────────
+# 8. Black-Litterman + VAR(1)
+# ────────────────────────────────────────────────────────────
+
+class BlackLittermanVAR(EstrategiaBase):
+    """Black-Litterman com views absolutas geradas via VAR(1) nos log-retornos.
+
+    Estima VAR(1) em janela móvel dos retornos de treino, faz forecast 1 passo
+    à frente para cada ativo e injeta como views absolutas no modelo BL.
+    P = identidade, Q = retornos anualizados previstos, Omega = Idzorek.
+
+    Fallback automático para AR(1) por ativo se VAR(1) for singular/instável;
+    fallback final para BL Neutro se ambos falharem.
+
+    Args:
+        market_caps: Series com market cap por ativo.
+        janela_var: Observações recentes usadas no VAR (padrão 90).
+        usar_mse_omega: Se True, usa MSE dos resíduos como Omega.
+        risk_aversion: λ da função objetivo.
+        tau: Parâmetro de escala para Omega e equilíbrio BL.
+        peso_maximo: Limite superior por ativo.
+    """
+
+    nome = "BL-VAR"
+
+    def __init__(
+        self,
+        market_caps: pd.Series,
+        janela_var: int = 90,
+        usar_mse_omega: bool = False,
+        risk_aversion: float = 2.5,
+        tau: float = 0.05,
+        peso_maximo: float = 0.40,
+    ) -> None:
+        self.market_caps    = market_caps
+        self.janela_var     = janela_var
+        self.usar_mse_omega = usar_mse_omega
+        self.risk_aversion  = risk_aversion
+        self.tau            = tau
+        self.peso_maximo    = peso_maximo
+
+    def calcular_pesos(
+        self,
+        retornos_treino: pd.DataFrame,
+        precos_treino: pd.DataFrame,
+    ) -> pd.Series:
+        log.info("[%s] Calculando pesos com views VAR(1)...", self.nome)
+        mc  = self.market_caps.reindex(retornos_treino.columns).dropna()
+        ret = retornos_treino[mc.index]
+
+        bl       = BlackLitterman(ret, mc, self.risk_aversion, self.tau)
+        data_ref = ret.index[-1]
+
+        try:
+            P, Q, Omega = gerar_views_var(
+                retornos=ret,
+                data_referencia=data_ref,
+                janela=self.janela_var,
+                tau=self.tau,
+                usar_mse_omega=self.usar_mse_omega,
+            )
+            log.info(
+                "[%s] %d views VAR geradas para %s.", self.nome, len(Q), data_ref.date(),
+            )
+            pesos = bl.executar(P=P, Q=Q, Omega=Omega, peso_maximo=self.peso_maximo)["pesos_otimos"]
+
+        except ValueError as exc:
+            log.warning(
+                "[%s] VAR falhou (%s) — usando equilíbrio BL Neutro.", self.nome, exc,
+            )
+            pesos = bl.executar(peso_maximo=self.peso_maximo)["pesos_otimos"]
+
         log.info("[%s] Pesos calculados.", self.nome)
         return pesos

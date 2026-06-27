@@ -323,6 +323,157 @@ def gerar_views_momentum(
 # Heurística de Omega (Idzorek)
 # ────────────────────────────────────────────────────────────
 
+def gerar_views_var(
+    retornos: pd.DataFrame,
+    data_referencia: pd.Timestamp,
+    janela: int = 90,
+    tau: float = 0.05,
+    usar_mse_omega: bool = False,
+    cond_max: float = 1e8,
+    raio_espectral_max: float = 2.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Gera views ABSOLUTAS via VAR(1) com forecast 1 passo à frente.
+
+    Estima VAR(1) nos log-retornos das últimas `janela` observações antes de
+    data_referencia e computa previsão de retorno diário para cada ativo,
+    convertendo para escala anual (base 365 dias, consistente com o restante
+    do pipeline).
+
+    Retorna P = identidade n×n (view absoluta por ativo), Q = retornos anuais
+    previstos e Omega diagonal via Idzorek ou MSE-normalizado.
+
+    Fallback para AR(1) independente por ativo se VAR(1) for mal-condicionado
+    (cond > cond_max) ou instável (raio espectral > raio_espectral_max).
+
+    Args:
+        retornos: DataFrame de log-retornos diários (colunas = ativos).
+        data_referencia: Última data da janela de treino (inclusive).
+        janela: Observações recentes usadas para estimar o VAR (padrão 90).
+        tau: Parâmetro de escala para Omega Idzorek.
+        usar_mse_omega: Se True, usa MSE dos resíduos como Omega.
+        cond_max: Limiar de condição para detectar singularidade.
+        raio_espectral_max: Limiar de raio espectral para instabilidade.
+
+    Returns:
+        Tupla (P, Q, Omega):
+            P:     np.ndarray (n, n) — identidade (view absoluta por ativo)
+            Q:     np.ndarray (n,)   — retornos anualizados previstos
+            Omega: np.ndarray (n, n) — matriz diagonal de incerteza
+
+    Raises:
+        ValueError: Se janela for insuficiente ou retornos vazio.
+    """
+    dados_ate_ref = retornos.loc[:data_referencia].dropna(how="any")
+    dados_janela = dados_ate_ref.iloc[-janela:]
+
+    ativos = list(dados_janela.columns)
+    n = len(ativos)
+    T = len(dados_janela)
+
+    log.info(
+        "[Views VAR] Gerando views VAR(1) para %s "
+        "(T=%d, n=%d, janela=%d, tau=%.3f, omega=%s)...",
+        data_referencia.date(), T, n, janela, tau,
+        "MSE" if usar_mse_omega else "Idzorek",
+    )
+
+    if T < n + 2:
+        raise ValueError(
+            f"Janela insuficiente para VAR(1): T={T} < n+2={n + 2}. "
+            f"Reduza n_ativos ou aumente janela."
+        )
+
+    X = dados_janela.values[:-1].astype(float)   # (T-1) × n lagged
+    Y = dados_janela.values[1:].astype(float)    # (T-1) × n current
+    r_ultimo = dados_janela.values[-1].astype(float)  # n forecast input
+
+    usar_ar1 = False
+
+    try:
+        B, _, rank, _ = np.linalg.lstsq(X, Y, rcond=None)  # n × n  (A^T)
+    except np.linalg.LinAlgError as exc:
+        log.warning("[Views VAR] lstsq falhou (%s). Usando fallback AR(1).", exc)
+        usar_ar1 = True
+        B = None
+        rank = 0
+
+    if not usar_ar1:
+        cond = np.linalg.cond(B)
+        if cond > cond_max:
+            log.warning(
+                "[Views VAR] B mal-condicionado (cond=%.2e). Usando fallback AR(1).", cond,
+            )
+            usar_ar1 = True
+
+    if not usar_ar1:
+        try:
+            eigenvalues = np.linalg.eigvals(B.T)
+            raio = float(np.max(np.abs(eigenvalues)))
+            log.debug("[Views VAR] Raio espectral=%.4f.", raio)
+            if raio > raio_espectral_max:
+                log.warning(
+                    "[Views VAR] Sistema instável (raio=%.4f). Usando fallback AR(1).", raio,
+                )
+                usar_ar1 = True
+        except np.linalg.LinAlgError:
+            log.warning("[Views VAR] Eigenvalues falharam. Usando fallback AR(1).")
+            usar_ar1 = True
+
+    if usar_ar1:
+        log.info("[Views VAR] Estimando AR(1) independente por ativo...")
+        r_forecast_diario = np.zeros(n)
+        E = np.zeros_like(Y)
+        for i in range(n):
+            x_i = X[:, i].reshape(-1, 1)
+            y_i = Y[:, i]
+            try:
+                a_i = float(np.linalg.lstsq(x_i, y_i, rcond=None)[0][0])
+                r_forecast_diario[i] = a_i * r_ultimo[i]
+                E[:, i] = y_i - x_i[:, 0] * a_i
+                log.debug(
+                    "[Views VAR] AR(1) %-8s: a=%.4f  r_last=%.6f  r_hat=%.6f",
+                    ativos[i], a_i, r_ultimo[i], r_forecast_diario[i],
+                )
+            except Exception as exc:
+                log.warning("[Views VAR] AR(1) %-8s falhou: %s. Usando 0.", ativos[i], exc)
+    else:
+        r_forecast_diario = r_ultimo @ B  # n-vector
+        E = Y - X @ B
+        log.debug(
+            "[Views VAR] VAR(1): cond=%.2e, rank=%d, raio=%.4f.",
+            cond, rank, raio,
+        )
+
+    # Converte retorno diário previsto para anual (base 365, composto)
+    Q = np.array([view_diaria_para_anual(float(r)) for r in r_forecast_diario])
+
+    log.debug("[Views VAR] Forecasts por ativo:")
+    for i, ativo in enumerate(ativos):
+        log.debug(
+            "  %-8s  r_diario=%.6f  r_anual=%.4f (%.2f%% a.a.)",
+            ativo, r_forecast_diario[i], Q[i], Q[i] * 100,
+        )
+
+    # P = identidade (view absoluta por ativo)
+    P = np.eye(n)
+
+    if usar_mse_omega:
+        mse = np.mean(E ** 2, axis=0)
+        # Anualiza a variância dos resíduos diários
+        Omega = np.diag(mse * DIAS_ANO_CRIPTO)
+        log.debug("[Views VAR] Omega MSE diagonal (anualizdo): %s", np.diag(Omega).round(8))
+    else:
+        cov_anual = calcular_matriz_covariancia_ledoitwolf(dados_janela).values
+        Omega = _calcular_omega_idzorek(P, cov_anual, tau)
+        log.debug("[Views VAR] Omega Idzorek diagonal: %s", np.diag(Omega).round(8))
+
+    log.info(
+        "[Views VAR] %d views geradas para %s via %s.",
+        n, data_referencia.date(), "AR(1)" if usar_ar1 else "VAR(1)",
+    )
+    return P, Q, Omega
+
+
 def _calcular_omega_idzorek(
     P: np.ndarray,
     cov: np.ndarray,
