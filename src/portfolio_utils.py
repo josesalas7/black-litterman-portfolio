@@ -13,10 +13,6 @@ from src.config import DIAS_ANO_CRIPTO  # re-exportado para backward compat
 log = logging.getLogger(__name__)
 
 
-# ────────────────────────────────────────────────────────────
-# Risco e retorno individuais
-# ────────────────────────────────────────────────────────────
-
 def calcular_matriz_covariancia(
     retornos: pd.DataFrame,
     anualizar: bool = True,
@@ -135,10 +131,6 @@ def calcular_volatilidades(
     return vol
 
 
-# ────────────────────────────────────────────────────────────
-# Métricas de portfólio
-# ────────────────────────────────────────────────────────────
-
 def calcular_sharpe(
     retornos_portfolio: pd.Series,
     risk_free: float = 0.0,
@@ -210,16 +202,20 @@ def estatisticas_portfolio(retornos_portfolio: pd.Series) -> dict:
 def metricas_equity_curve(
     equity: pd.Series,
     benchmark: pd.Series | None = None,
+    cdi_diario: pd.Series | None = None,
 ) -> dict:
     """Métricas de risco/retorno a partir de uma equity curve (base 100).
 
     Args:
         equity:    Series com equity curve indexada por data (começa em 100).
         benchmark: Series opcional com equity curve do benchmark (mesma base).
+        cdi_diario: Series opcional com CDI diário (decimal) p/ Sharpe-excesso.
+            Se ausente, Sharpe usa rf=0 (NÃO recomendado p/ projeto Vault).
 
     Returns:
-        Dict com retorno_total_%, retorno_anualizado_%, volatilidade_%,
-        sharpe, max_drawdown_%, e — se benchmark fornecido — alpha e beta.
+        Dict com retorno_total_%, cagr_%, retorno_anualizado_%, volatilidade_%,
+        sharpe (excesso vs CDI quando fornecido), sortino, max_drawdown_%,
+        e — se benchmark fornecido — alpha e beta.
     """
     ret = equity.pct_change().dropna()
     n = len(ret)
@@ -228,19 +224,36 @@ def metricas_equity_curve(
 
     ret_anual = ret.mean() * DIAS_ANO_CRIPTO
     vol_anual = ret.std() * np.sqrt(DIAS_ANO_CRIPTO)
-    sharpe = ret_anual / vol_anual if vol_anual > 0 else np.nan
+
+    if cdi_diario is not None and not cdi_diario.empty:
+        # CDI alinhado: 0 em fins de semana/feriados (CDI acumula em dias úteis;
+        # ffill inflaria a taxa ao anualizar por 365 dias)
+        cdi_alinhado = cdi_diario.reindex(ret.index).fillna(0.0)
+        excesso = ret - cdi_alinhado
+        ret_excesso_anual = excesso.mean() * DIAS_ANO_CRIPTO
+        sharpe = ret_excesso_anual / vol_anual if vol_anual > 0 else np.nan
+        downside = excesso[excesso < 0].std() * np.sqrt(DIAS_ANO_CRIPTO)
+        sortino = ret_excesso_anual / downside if downside and downside > 0 else np.nan
+    else:
+        sharpe = ret_anual / vol_anual if vol_anual > 0 else np.nan
+        downside = ret[ret < 0].std() * np.sqrt(DIAS_ANO_CRIPTO)
+        sortino = ret_anual / downside if downside and downside > 0 else np.nan
 
     cum   = (1 + ret).cumprod()
     pico  = cum.cummax()
     max_dd = float(((cum - pico) / pico).min())
 
     ret_total = float(equity.iloc[-1] / equity.iloc[0] - 1)
+    # CAGR composto — anualiza pelo crescimento geométrico, não pela média aritmética.
+    cagr = float((equity.iloc[-1] / equity.iloc[0]) ** (DIAS_ANO_CRIPTO / n) - 1) if equity.iloc[0] > 0 else float("nan")
 
     resultado = {
         "retorno_total_%":      round(ret_total  * 100, 2),
+        "cagr_%":               round(cagr       * 100, 2),
         "retorno_anualizado_%": round(ret_anual  * 100, 2),
         "volatilidade_%":       round(vol_anual  * 100, 2),
         "sharpe":               round(sharpe,       4) if not np.isnan(sharpe) else float("nan"),
+        "sortino":              round(sortino,      4) if not np.isnan(sortino) else float("nan"),
         "max_drawdown_%":       round(max_dd     * 100, 2),
         "n_dias":               n,
     }

@@ -29,7 +29,13 @@
       "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\joses\\\\Documents\\\\black-litterman-portfolio\\\\data\" -File | Select-Object Name, @{Name=\"Size\\(bytes\\)\";Expression={$_.Length}} | Format-Table -AutoSize)",
       "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\joses\\\\Documents\\\\black-litterman-portfolio\\\\data\\\\figuras\" -File 2>$null | Select-Object Name, @{Name=\"Size\\(bytes\\)\";Expression={$_.Length}} | Format-Table -AutoSize)",
       "Bash(python -m src.run_backtest)",
-      "Bash(findstr /I \"CDI\\\\|BL-VAR\\\\|VAR\\\\|AR\\(1\\)\\\\|custo\\\\|turnover\\\\|CONCLUIDO\\\\|Backtest conf\\\\|Periodo\")"
+      "Bash(findstr /I \"CDI\\\\|BL-VAR\\\\|VAR\\\\|AR\\(1\\)\\\\|custo\\\\|turnover\\\\|CONCLUIDO\\\\|Backtest conf\\\\|Periodo\")",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -q)",
+      "Bash(.venv/Scripts/python.exe *)",
+      "Bash(grep -nE '^# ─{40,}|^# [0-9]+\\\\. ' src/estrategias.py)",
+      "Bash(grep -nE '^# ─{40,}|^# [A-Z]' src/views.py)",
+      "Bash(grep -nE '^# ─{40,}|^# [A-Z]' src/backtest.py)",
+      "Bash(grep *)"
     ]
   }
 }

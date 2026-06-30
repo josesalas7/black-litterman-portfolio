@@ -18,10 +18,6 @@ from src.config import DIAS_ANO_CRIPTO
 log = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────
-# 1. Conversão de confiança → Ω  (método Idzorek, 2005)
-# ─────────────────────────────────────────────────────────────
-
 def idzorek_omega(
     P: np.ndarray,
     Sigma: np.ndarray,
@@ -85,10 +81,6 @@ def idzorek_omega(
     return np.diag(omegas)
 
 
-# ─────────────────────────────────────────────────────────────
-# 2. Construção de P e Q a partir dos inputs do gestor
-# ─────────────────────────────────────────────────────────────
-
 def construir_view_absoluta(
     ativo: str,
     retorno_pct: float,
@@ -150,10 +142,6 @@ def construir_view_absoluta(
     return P, Q
 
 
-# ─────────────────────────────────────────────────────────────
-# 3. Mini-backtest estático (últimos N dias)
-# ─────────────────────────────────────────────────────────────
-
 def mini_backtest_view(
     retornos: pd.DataFrame,
     w_bl: pd.Series,
@@ -199,7 +187,9 @@ def mini_backtest_view(
         if soma <= 0:
             raise ValueError("Pesos somam zero ou negativo após clip.")
         p = p / soma
-        return (ret[ativos] * p).sum(axis=1)
+        # log → aritmético antes de combinar (downstream usa (1+r).cumprod);
+        # sem isso acumula viés de Jensen (~σ²/2 por dia).
+        return (np.expm1(ret[ativos]) * p).sum(axis=1)
 
     n_ew = len(ativos)
     w_ew = pd.Series(1.0 / n_ew, index=ativos)
@@ -224,19 +214,21 @@ def mini_backtest_view(
     return equity
 
 
-# ─────────────────────────────────────────────────────────────
-# 4. Métricas comparativas
-# ─────────────────────────────────────────────────────────────
-
-def tabela_metricas_comparativa(equity: pd.DataFrame) -> pd.DataFrame:
+def tabela_metricas_comparativa(
+    equity: pd.DataFrame,
+    cdi_diario: pd.Series | None = None,
+) -> pd.DataFrame:
     """Métricas de risco/retorno para cada estratégia do mini-backtest.
 
     Args:
         equity: DataFrame com equity curves (começa em 100).
                 Colunas = estratégias, linhas = datas.
+        cdi_diario: Series opcional com CDI diário p/ Sharpe-excesso.
+                Se ausente, Sharpe usa rf=0.
 
     Returns:
-        DataFrame transposto (estratégias × métricas).
+        DataFrame transposto (estratégias × métricas) com CAGR composto
+        e Sharpe-excesso vs CDI quando o CDI for fornecido.
     """
     retornos_diarios = equity.pct_change().dropna()
 
@@ -252,21 +244,34 @@ def tabela_metricas_comparativa(equity: pd.DataFrame) -> pd.DataFrame:
         ret_anual = ret.mean() * DIAS_ANO_CRIPTO
         vol_anual = ret.std() * np.sqrt(DIAS_ANO_CRIPTO)
 
-        sharpe = ret_anual / vol_anual if vol_anual > 0 else np.nan
-
-        neg = ret[ret < 0]
-        downside = neg.std() * np.sqrt(DIAS_ANO_CRIPTO) if len(neg) > 1 else np.nan
-        sortino = ret_anual / downside if (downside and downside > 0) else np.nan
+        if cdi_diario is not None and not cdi_diario.empty:
+            cdi_alinhado = cdi_diario.reindex(ret.index).fillna(0.0)
+            excesso = ret - cdi_alinhado
+            ret_excesso_anual = excesso.mean() * DIAS_ANO_CRIPTO
+            sharpe = ret_excesso_anual / vol_anual if vol_anual > 0 else np.nan
+            downside = excesso[excesso < 0].std() * np.sqrt(DIAS_ANO_CRIPTO)
+            sortino = ret_excesso_anual / downside if (downside and downside > 0) else np.nan
+        else:
+            sharpe = ret_anual / vol_anual if vol_anual > 0 else np.nan
+            neg = ret[ret < 0]
+            downside = neg.std() * np.sqrt(DIAS_ANO_CRIPTO) if len(neg) > 1 else np.nan
+            sortino = ret_anual / downside if (downside and downside > 0) else np.nan
 
         cum  = (1 + ret).cumprod()
         pico = cum.cummax()
         max_dd = float(((cum - pico) / pico).min())
 
         ret_total = float(equity[col].iloc[-1] / equity[col].iloc[0] - 1) * 100
+        n_dias = len(ret)
+        cagr = (
+            float((equity[col].iloc[-1] / equity[col].iloc[0]) ** (DIAS_ANO_CRIPTO / n_dias) - 1) * 100
+            if n_dias > 0 and equity[col].iloc[0] > 0 else float("nan")
+        )
 
         nome = nomes_display.get(col, col)
         rows[nome] = {
             "Retorno total (%)":  round(ret_total, 2),
+            "CAGR (%)":           round(cagr, 2) if not np.isnan(cagr) else float("nan"),
             "Retorno anual. (%)": round(ret_anual * 100, 2),
             "Vol anual. (%)":     round(vol_anual * 100, 2),
             "Sharpe":             round(sharpe, 3) if not np.isnan(sharpe) else float("nan"),
@@ -277,9 +282,6 @@ def tabela_metricas_comparativa(equity: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).T
 
 
-# ─────────────────────────────────────────────────────────────
-# Paleta Vault Capital
-# ─────────────────────────────────────────────────────────────
 _VAULT_GOLD   = "#EECC2D"
 _VAULT_BG     = "rgba(0,0,0,0)"            # fundo transparente
 _VAULT_CARD   = "rgba(0,0,0,0)"            # fundo transparente
@@ -313,10 +315,6 @@ _LAYOUT_BASE = dict(
     hovermode="x unified",
 )
 
-
-# ─────────────────────────────────────────────────────────────
-# 5. Gráficos Plotly
-# ─────────────────────────────────────────────────────────────
 
 def plot_pesos_comparacao(
     w_mkt: pd.Series,

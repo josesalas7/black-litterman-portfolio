@@ -31,10 +31,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-# ────────────────────────────────────────────────────────────
-# Resultado
-# ────────────────────────────────────────────────────────────
-
 @dataclass
 class ResultadoBacktest:
     """Container imutável dos resultados de um backtest."""
@@ -148,10 +144,6 @@ class ResultadoBacktest:
         delta = self.historico_pesos.diff().abs().sum(axis=1) / 2
         return delta.dropna()
 
-
-# ────────────────────────────────────────────────────────────
-# Backtest
-# ────────────────────────────────────────────────────────────
 
 class WalkForwardBacktest:
     """Backtest walk-forward para estratégias de alocação.
@@ -364,7 +356,10 @@ class WalkForwardBacktest:
             p = pesos[ativos]
             p = p / p.sum()  # renormaliza após possível remoção de ativos
 
-            ret_portfolio = (holding[ativos] * p).sum(axis=1)
+            # holding traz log-retornos; converte p/ aritmético antes de combinar
+            # linearmente. Sem isso, downstream (1+r).cumprod() acumula viés de
+            # Jensen (~σ²/2 por dia), gerando ~30pp/ano de perda artificial.
+            ret_portfolio = (np.expm1(holding[ativos]) * p).sum(axis=1)
             lista_retornos.append(ret_portfolio)
 
         if not lista_retornos:
@@ -469,10 +464,6 @@ class WalkForwardBacktest:
         return resultados
 
 
-# ────────────────────────────────────────────────────────────
-# Backtest rolante standalone — independente da classe BL
-# ────────────────────────────────────────────────────────────
-
 def backtest_rolante_bl(
     retornos: pd.DataFrame,
     market_caps: pd.Series,
@@ -481,6 +472,7 @@ def backtest_rolante_bl(
     tau: float = 0.05,
     risk_aversion: float = 2.5,
     peso_maximo: float = 0.40,
+    cdi_diario: pd.Series | None = None,
 ) -> dict:
     """Backtest rolante do Black-Litterman em modo neutro (sem views).
 
@@ -557,7 +549,8 @@ def backtest_rolante_bl(
         ativos = holding_ret.columns.intersection(pesos.index)
         p = pesos[ativos]
         p = p / p.sum()
-        lista_retornos_bl.append((holding_ret[ativos] * p).sum(axis=1))
+        # log → aritmético antes de combinar linearmente (ver nota em executar_estrategia)
+        lista_retornos_bl.append((np.expm1(holding_ret[ativos]) * p).sum(axis=1))
 
     if not lista_retornos_bl:
         raise RuntimeError("Nenhum retorno gerado no backtest rolante.")
@@ -571,14 +564,15 @@ def backtest_rolante_bl(
     ativos_bench = retornos.columns.intersection(market_caps.index)
     mc_bench = market_caps[ativos_bench]
     w_bench = mc_bench / mc_bench.sum()
-    ret_benchmark_serie = (ret_periodo_teste[ativos_bench] * w_bench).sum(axis=1)
+    # log → aritmético antes de combinar (consistente com retornos do portfólio)
+    ret_benchmark_serie = (np.expm1(ret_periodo_teste[ativos_bench]) * w_bench).sum(axis=1)
     ret_benchmark_serie = ret_benchmark_serie.reindex(ret_bl_serie.index).fillna(0)
 
     equity_bl   = (1 + ret_bl_serie).cumprod() * 100
     equity_bench = (1 + ret_benchmark_serie).cumprod() * 100
 
-    metricas_bl    = metricas_equity_curve(equity_bl,    benchmark=equity_bench)
-    metricas_bench = metricas_equity_curve(equity_bench)
+    metricas_bl    = metricas_equity_curve(equity_bl,    benchmark=equity_bench, cdi_diario=cdi_diario)
+    metricas_bench = metricas_equity_curve(equity_bench, cdi_diario=cdi_diario)
 
     log.info(
         "Backtest rolante concluído: %d rebalanceamentos, %d dias de retorno. "

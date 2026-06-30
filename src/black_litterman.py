@@ -128,10 +128,6 @@ class BlackLitterman:
 
         log.info("Covariância calculada com estimador: %s", estimador)
 
-    # ────────────────────────────────────────────────────────
-    # Etapa 1 — Pesos de mercado
-    # ────────────────────────────────────────────────────────
-
     def calcular_pesos_mercado(self) -> pd.Series:
         """Pesos proporcionais ao market cap (carteira de equilíbrio).
 
@@ -152,10 +148,6 @@ class BlackLitterman:
             dict(w.sort_values(ascending=False).head(3).round(4)),
         )
         return w
-
-    # ────────────────────────────────────────────────────────
-    # Etapa 2 — Retornos implícitos de equilíbrio
-    # ────────────────────────────────────────────────────────
 
     def calcular_retornos_implicitos(self) -> pd.Series:
         """Π = λ Σ w_mkt  (engenharia reversa do CAPM).
@@ -186,10 +178,6 @@ class BlackLitterman:
             pi_series.min(), pi_series.max(),
         )
         return pi_series
-
-    # ────────────────────────────────────────────────────────
-    # Etapa 3 — Combinar views (fórmula bayesiana)
-    # ────────────────────────────────────────────────────────
 
     def combinar_views(
         self,
@@ -273,10 +261,6 @@ class BlackLitterman:
             (result.values - pi).mean(),
         )
         return result
-
-    # ────────────────────────────────────────────────────────
-    # Etapa 4 — Otimização média-variância
-    # ────────────────────────────────────────────────────────
 
     def otimizar(
         self,
@@ -362,10 +346,6 @@ class BlackLitterman:
         )
         return pesos
 
-    # ────────────────────────────────────────────────────────
-    # Pipeline completo
-    # ────────────────────────────────────────────────────────
-
     def executar(
         self,
         P: np.ndarray | None = None,
@@ -392,15 +372,11 @@ class BlackLitterman:
                 'pesos_otimos':         Series
                 'estatisticas':         dict
         """
-        log.info("=" * 55)
         log.info("PIPELINE BLACK-LITTERMAN (%d ativos)", self.n)
-        log.info("=" * 55)
 
-        # Etapas 1 e 2
         w_mkt = self.calcular_pesos_mercado()
         pi    = self.calcular_retornos_implicitos()
 
-        # Etapa 3: combinar views ou usar equilíbrio puro
         tem_views = P is not None and Q is not None and Omega is not None
         if tem_views:
             mu_bl = self.combinar_views(P, Q, Omega)
@@ -410,10 +386,8 @@ class BlackLitterman:
             mu_bl.name = "retornos_combinados"
             log.info("[3/4] Sem views — usando retornos de equilibrio (Pi).")
 
-        # Etapa 4: otimização
         pesos = self.otimizar(mu_bl, self.cov, **kwargs_otimizacao)
 
-        # Estatísticas do portfólio otimizado
         ret_portfolio = aplicar_pesos(self.retornos, pesos)
         stats = estatisticas_portfolio(ret_portfolio)
 
@@ -424,7 +398,6 @@ class BlackLitterman:
             stats["sharpe"],
             stats["max_drawdown_%"],
         )
-        log.info("=" * 55)
 
         return {
             "pesos_mercado":       w_mkt,
@@ -433,10 +406,6 @@ class BlackLitterman:
             "pesos_otimos":        pesos,
             "estatisticas":        stats,
         }
-
-    # ────────────────────────────────────────────────────────
-    # Validações internas
-    # ────────────────────────────────────────────────────────
 
     @staticmethod
     def _validar_inputs(retornos: pd.DataFrame, market_caps: pd.Series) -> None:

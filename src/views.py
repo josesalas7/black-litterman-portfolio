@@ -35,10 +35,6 @@ from src.portfolio_utils import calcular_matriz_covariancia_ledoitwolf, DIAS_ANO
 log = logging.getLogger(__name__)
 
 
-# ────────────────────────────────────────────────────────────
-# Conversores de escala temporal
-# ────────────────────────────────────────────────────────────
-
 def view_anual_para_diaria(r_anual: float) -> float:
     """Converte retorno anual de uma view para escala diária (cripto: 365 dias).
 
@@ -65,10 +61,6 @@ def view_diaria_para_anual(r_diario: float) -> float:
     """
     return (1 + r_diario) ** DIAS_ANO_CRIPTO - 1
 
-
-# ────────────────────────────────────────────────────────────
-# Indicadores técnicos
-# ────────────────────────────────────────────────────────────
 
 def calcular_rsi(precos: pd.Series, periodo: int = 14) -> pd.Series:
     """RSI (Relative Strength Index) usando média exponencial (EWM).
@@ -118,10 +110,6 @@ def calcular_momentum(precos: pd.Series, periodo: int = 30) -> pd.Series:
 
     return precos.pct_change(periodo)
 
-
-# ────────────────────────────────────────────────────────────
-# Geração de views
-# ────────────────────────────────────────────────────────────
 
 def gerar_views_rsi(
     precos: pd.DataFrame,
@@ -319,10 +307,6 @@ def gerar_views_momentum(
     return P, Q, Omega
 
 
-# ────────────────────────────────────────────────────────────
-# Heurística de Omega (Idzorek)
-# ────────────────────────────────────────────────────────────
-
 def gerar_views_var(
     retornos: pd.DataFrame,
     data_referencia: pd.Timestamp,
@@ -331,6 +315,7 @@ def gerar_views_var(
     usar_mse_omega: bool = False,
     cond_max: float = 1e8,
     raio_espectral_max: float = 2.0,
+    q_anual_max: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Gera views ABSOLUTAS via VAR(1) com forecast 1 passo à frente.
 
@@ -353,6 +338,9 @@ def gerar_views_var(
         usar_mse_omega: Se True, usa MSE dos resíduos como Omega.
         cond_max: Limiar de condição para detectar singularidade.
         raio_espectral_max: Limiar de raio espectral para instabilidade.
+        q_anual_max: Clip simétrico em |Q| (anual). VAR(1) overfitta com n²
+            parâmetros e poucas obs; sem isso, ruído diário vira views de
+            milhões de % a.a. quando anualizado.
 
     Returns:
         Tupla (P, Q, Omega):
@@ -383,18 +371,24 @@ def gerar_views_var(
             f"Reduza n_ativos ou aumente janela."
         )
 
-    X = dados_janela.values[:-1].astype(float)   # (T-1) × n lagged
-    Y = dados_janela.values[1:].astype(float)    # (T-1) × n current
-    r_ultimo = dados_janela.values[-1].astype(float)  # n forecast input
+    # Inclui intercepto: regressão Y = c + X @ A. Sem isso, força a relação
+    # pela origem e enviesa o forecast quando o último r é grande em módulo.
+    X_raw   = dados_janela.values[:-1].astype(float)   # (T-1) × n lagged
+    Y       = dados_janela.values[1:].astype(float)    # (T-1) × n current
+    r_ultimo = dados_janela.values[-1].astype(float)   # n forecast input
+    X = np.hstack([np.ones((X_raw.shape[0], 1)), X_raw])  # (T-1) × (n+1)
 
     usar_ar1 = False
 
     try:
-        B, _, rank, _ = np.linalg.lstsq(X, Y, rcond=None)  # n × n  (A^T)
+        B_full, _, rank, _ = np.linalg.lstsq(X, Y, rcond=None)  # (n+1) × n
+        c = B_full[0]      # intercepto (n,)
+        B = B_full[1:]     # n × n (A^T)
     except np.linalg.LinAlgError as exc:
         log.warning("[Views VAR] lstsq falhou (%s). Usando fallback AR(1).", exc)
         usar_ar1 = True
         B = None
+        c = None
         rank = 0
 
     if not usar_ar1:
@@ -420,25 +414,26 @@ def gerar_views_var(
             usar_ar1 = True
 
     if usar_ar1:
-        log.info("[Views VAR] Estimando AR(1) independente por ativo...")
+        log.info("[Views VAR] Estimando AR(1) com intercepto por ativo...")
         r_forecast_diario = np.zeros(n)
         E = np.zeros_like(Y)
         for i in range(n):
-            x_i = X[:, i].reshape(-1, 1)
+            x_i = np.column_stack([np.ones(X_raw.shape[0]), X_raw[:, i]])  # T-1 × 2
             y_i = Y[:, i]
             try:
-                a_i = float(np.linalg.lstsq(x_i, y_i, rcond=None)[0][0])
-                r_forecast_diario[i] = a_i * r_ultimo[i]
-                E[:, i] = y_i - x_i[:, 0] * a_i
+                coef = np.linalg.lstsq(x_i, y_i, rcond=None)[0]
+                c_i, a_i = float(coef[0]), float(coef[1])
+                r_forecast_diario[i] = c_i + a_i * r_ultimo[i]
+                E[:, i] = y_i - x_i @ coef
                 log.debug(
-                    "[Views VAR] AR(1) %-8s: a=%.4f  r_last=%.6f  r_hat=%.6f",
-                    ativos[i], a_i, r_ultimo[i], r_forecast_diario[i],
+                    "[Views VAR] AR(1) %-8s: c=%.5f  a=%.4f  r_last=%.6f  r_hat=%.6f",
+                    ativos[i], c_i, a_i, r_ultimo[i], r_forecast_diario[i],
                 )
             except Exception as exc:
                 log.warning("[Views VAR] AR(1) %-8s falhou: %s. Usando 0.", ativos[i], exc)
     else:
-        r_forecast_diario = r_ultimo @ B  # n-vector
-        E = Y - X @ B
+        r_forecast_diario = c + r_ultimo @ B  # n-vector
+        E = Y - X @ B_full
         log.debug(
             "[Views VAR] VAR(1): cond=%.2e, rank=%d, raio=%.4f.",
             cond, rank, raio,
@@ -446,6 +441,16 @@ def gerar_views_var(
 
     # Converte retorno diário previsto para anual (base 365, composto)
     Q = np.array([view_diaria_para_anual(float(r)) for r in r_forecast_diario])
+
+    # Clip simétrico: anualizar (1+r)^365 amplifica overfit do VAR para forecasts
+    # absurdos (vimos > 1.000.000% em algumas datas). Limita a |q_anual_max|.
+    n_clip = int(np.sum(np.abs(Q) > q_anual_max))
+    if n_clip > 0:
+        log.warning(
+            "[Views VAR] %d/%d views excediam |%.0f%%| a.a. — aplicando clip.",
+            n_clip, n, q_anual_max * 100,
+        )
+        Q = np.clip(Q, -q_anual_max, q_anual_max)
 
     log.debug("[Views VAR] Forecasts por ativo:")
     for i, ativo in enumerate(ativos):

@@ -61,10 +61,6 @@ UNIVERSO_LIST: list[str] = list(UNIVERSO.keys())
 JANELA_SIGMA  = 365   # dias de retornos usados para estimar Σ
 DIAS_BACKTEST = 90    # janela do mini-backtest
 
-# ─────────────────────────────────────────────────────────────
-# Configuração da página
-# ─────────────────────────────────────────────────────────────
-
 st.set_page_config(
     page_title="Vault Capital — BL Portfolio",
     page_icon="⬡",
@@ -329,9 +325,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ─────────────────────────────────────────────────────────────
-# Carregamento de dados (cacheado 1h)
-# ─────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner="Carregando dados de mercado...")
 def carregar_dados() -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, str]:
@@ -384,9 +377,6 @@ def carregar_dados() -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, str]:
     return retornos, precos, market_caps, data_mc
 
 
-# ─────────────────────────────────────────────────────────────
-# Cálculos BL
-# ─────────────────────────────────────────────────────────────
 
 def _janela_limpa(retornos: pd.DataFrame) -> pd.DataFrame:
     """Últimos JANELA_SIGMA dias sem NaN (exclui ativos com histórico curto)."""
@@ -398,12 +388,23 @@ def _janela_limpa(retornos: pd.DataFrame) -> pd.DataFrame:
     return limpa
 
 
+@st.cache_data(ttl=3600, show_spinner="Buscando CDI no SGS/BCB...")
+def _cdi_diario_cache(_retornos: pd.DataFrame) -> pd.Series:
+    """CDI alinhado ao período dos retornos (cacheado 1h)."""
+    from src.data.cdi import fetch_cdi
+    return fetch_cdi(
+        data_inicio=_retornos.index.min().date(),
+        data_fim=_retornos.index.max().date(),
+    )
+
+
 @st.cache_data(ttl=3600, show_spinner="Rodando backtest rolante BL (pode levar ~20s)...")
 def calcular_backtest_rolante(
     _retornos: pd.DataFrame,
     _market_caps: pd.Series,
 ) -> dict:
-    """Backtest rolante BL neutro (sem views) — resultado cacheado 1h."""
+    """Backtest rolante BL neutro (sem views) — resultado cacheado 1h.
+    Passa CDI p/ Sharpe-excesso e CAGR composto nas métricas."""
     return backtest_rolante_bl(
         _retornos,
         _market_caps,
@@ -412,6 +413,7 @@ def calcular_backtest_rolante(
         tau=TAU,
         risk_aversion=RISK_AVERSION,
         peso_maximo=PESO_MAXIMO,
+        cdi_diario=_cdi_diario_cache(_retornos),
     )
 
 
@@ -497,9 +499,6 @@ def calcular_com_view(
     return resultado
 
 
-# ─────────────────────────────────────────────────────────────
-# Inicialização do session_state
-# ─────────────────────────────────────────────────────────────
 
 if "view_aplicada" not in st.session_state:
     st.session_state.view_aplicada = False
@@ -508,9 +507,6 @@ if "resultado_bl" not in st.session_state:
 if "erro_view" not in st.session_state:
     st.session_state.erro_view = None
 
-# ─────────────────────────────────────────────────────────────
-# Carregamento
-# ─────────────────────────────────────────────────────────────
 
 retornos, precos, market_caps, data_mc = carregar_dados()
 
@@ -520,9 +516,6 @@ with st.spinner("Calculando portfólio de equilíbrio..."):
 w_mkt        = resultado_benchmark["pesos_mercado"]
 ativos_usados = resultado_benchmark["ativos_usados"]
 
-# ─────────────────────────────────────────────────────────────
-# Sidebar — formulário de view
-# ─────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown(
@@ -622,11 +615,6 @@ with st.sidebar:
     st.caption(f"Market cap de referência: **{data_mc}**")
     st.caption(f"λ (risk aversion) = {RISK_AVERSION} | τ = {TAU}")
 
-# ─────────────────────────────────────────────────────────────
-# Área principal
-# ─────────────────────────────────────────────────────────────
-
-# Seleciona resultado a exibir
 tem_view = st.session_state.view_aplicada and st.session_state.resultado_bl is not None
 resultado_atual = st.session_state.resultado_bl if tem_view else resultado_benchmark
 
@@ -634,7 +622,6 @@ w_atual  = resultado_atual["pesos_otimos"]
 mu_atual = resultado_atual["retornos_combinados"]
 cov_atual = resultado_atual["cov"]
 
-# Cabeçalho de status
 if tem_view:
     info = resultado_atual["view_info"]
     st.success(
@@ -658,7 +645,6 @@ vol_esperada = float(np.sqrt(w_arr @ cov_arr @ w_arr)) * 100  # anual %
 sharpe_esperado = (ret_esperado / vol_esperada) if vol_esperada > 0 else 0.0
 tilt_max = float((w_atual - w_mkt.reindex(w_atual.index).fillna(0)).abs().max()) * 100
 
-# Benchmark para deltas
 w_b   = resultado_benchmark["pesos_otimos"].values
 mu_b  = resultado_benchmark["retornos_combinados"].reindex(resultado_benchmark["pesos_otimos"].index).fillna(0).values
 cov_b = resultado_benchmark["cov"].values
@@ -735,11 +721,12 @@ try:
     )
     st.plotly_chart(fig_bt, use_container_width=True)
 
-    # Tabela de métricas
-    df_met = tabela_metricas_comparativa(equity)
+    # Tabela de métricas — Sharpe/Sortino com CDI como rf, + CAGR composto
+    df_met = tabela_metricas_comparativa(equity, cdi_diario=_cdi_diario_cache(retornos))
     st.dataframe(
         df_met.style.format({
             "Retorno total (%)":  "{:.2f}%",
+            "CAGR (%)":           "{:.2f}%",
             "Retorno anual. (%)": "{:.2f}%",
             "Vol anual. (%)":     "{:.2f}%",
             "Sharpe":             "{:.3f}",

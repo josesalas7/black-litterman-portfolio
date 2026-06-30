@@ -62,9 +62,6 @@ logging.getLogger("sklearn").setLevel(logging.WARNING)
 
 log = logging.getLogger(__name__)
 
-# ────────────────────────────────────────────────────────────
-# Parâmetros do backtest
-# ────────────────────────────────────────────────────────────
 LOOKBACK_DAYS = 365
 HOLDING_DAYS  = 7
 RISK_AVERSION = 2.5

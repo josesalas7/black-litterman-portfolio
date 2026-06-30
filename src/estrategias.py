@@ -35,10 +35,6 @@ from src.views import gerar_views_rsi, gerar_views_momentum, gerar_views_var
 log = logging.getLogger(__name__)
 
 
-# ────────────────────────────────────────────────────────────
-# Classe base
-# ────────────────────────────────────────────────────────────
-
 class EstrategiaBase(ABC):
     """Interface comum a todas as estratégias de alocação."""
 
@@ -64,10 +60,6 @@ class EstrategiaBase(ABC):
         return f"{self.__class__.__name__}(nome='{self.nome}')"
 
 
-# ────────────────────────────────────────────────────────────
-# 1. Equal Weight
-# ────────────────────────────────────────────────────────────
-
 class EqualWeight(EstrategiaBase):
     """1/N — pesos iguais para todos os ativos.
 
@@ -88,10 +80,6 @@ class EqualWeight(EstrategiaBase):
         log.debug("[%s] Pesos: %s", self.nome, dict(pesos.round(4)))
         return pesos
 
-
-# ────────────────────────────────────────────────────────────
-# 2. Market-Cap Weight
-# ────────────────────────────────────────────────────────────
 
 class MarketCapWeight(EstrategiaBase):
     """Pesos proporcionais ao market cap.
@@ -122,10 +110,6 @@ class MarketCapWeight(EstrategiaBase):
         log.debug("[%s] Pesos: %s", self.nome, dict(pesos.round(4)))
         return pesos
 
-
-# ────────────────────────────────────────────────────────────
-# 3. Markowitz Puro
-# ────────────────────────────────────────────────────────────
 
 class MarkowitzPuro(EstrategiaBase):
     """Média-variância clássico com retornos históricos.
@@ -194,10 +178,6 @@ class MarkowitzPuro(EstrategiaBase):
         return pesos
 
 
-# ────────────────────────────────────────────────────────────
-# 4. Black-Litterman Neutro
-# ────────────────────────────────────────────────────────────
-
 class BlackLittermanNeutro(EstrategiaBase):
     """Black-Litterman sem views (equilíbrio puro).
 
@@ -239,10 +219,6 @@ class BlackLittermanNeutro(EstrategiaBase):
         log.info("[%s] Pesos calculados.", self.nome)
         return pesos
 
-
-# ────────────────────────────────────────────────────────────
-# 5. Black-Litterman + RSI
-# ────────────────────────────────────────────────────────────
 
 class BlackLittermanRSI(EstrategiaBase):
     """Black-Litterman com views absolutas geradas via RSI(14).
@@ -317,10 +293,6 @@ class BlackLittermanRSI(EstrategiaBase):
         return pesos
 
 
-# ────────────────────────────────────────────────────────────
-# 6. Black-Litterman + Momentum
-# ────────────────────────────────────────────────────────────
-
 class BlackLittermanMomentum(EstrategiaBase):
     """Black-Litterman com view relativa baseada em momentum (30 dias).
 
@@ -386,10 +358,6 @@ class BlackLittermanMomentum(EstrategiaBase):
         log.info("[%s] Pesos calculados.", self.nome)
         return pesos
 
-
-# ────────────────────────────────────────────────────────────
-# 7. Black-Litterman Combinado (RSI + Momentum)
-# ────────────────────────────────────────────────────────────
 
 class BlackLittermanCombinado(EstrategiaBase):
     """Black-Litterman com views de RSI e Momentum combinadas.
@@ -508,10 +476,6 @@ class BlackLittermanCombinado(EstrategiaBase):
         log.info("[%s] Pesos calculados.", self.nome)
         return pesos
 
-
-# ────────────────────────────────────────────────────────────
-# 8. Black-Litterman + VAR(1)
-# ────────────────────────────────────────────────────────────
 
 class BlackLittermanVAR(EstrategiaBase):
     """Black-Litterman com views absolutas geradas via VAR(1) nos log-retornos.

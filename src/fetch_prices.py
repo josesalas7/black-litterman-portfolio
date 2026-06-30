@@ -21,11 +21,45 @@ from src.config import (
 log = logging.getLogger(__name__)
 
 
+def _baixar_ticker_individual(yahoo_ticker: str, max_tentativas: int = 3) -> pd.Series | None:
+    """Baixa um ticker isolado com retry. Usado para resgatar ativos perdidos
+    em batch por race condition no cache SQLite do yfinance ('database is locked').
+    """
+    import time
+    for tentativa in range(1, max_tentativas + 1):
+        try:
+            df = yf.download(
+                tickers=yahoo_ticker,
+                start=DATA_INICIO.date(),
+                end=DATA_FIM.date(),
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+            )
+            if df.empty:
+                log.warning("[retry %d/%d] %s veio vazio.", tentativa, max_tentativas, yahoo_ticker)
+            else:
+                col = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+                if hasattr(col, "columns"):  # ainda DataFrame (multi-coluna)
+                    col = col.iloc[:, 0]
+                return col.dropna()
+        except Exception as exc:
+            log.warning("[retry %d/%d] %s falhou: %s", tentativa, max_tentativas, yahoo_ticker, exc)
+        time.sleep(0.5 * tentativa)  # backoff linear
+    return None
+
+
 def coletar_todos_pares() -> pd.DataFrame:
-    """Baixa preços de fechamento diários para todos os ativos do universo."""
+    """Baixa preços de fechamento diários para todos os ativos do universo.
+
+    Robustez contra race condition do cache SQLite do yfinance: se algum
+    ticker faltar no batch inicial, refaz a coleta individualmente com
+    retry. Se ao final algum ticker ainda estiver ausente, levanta erro
+    explícito em vez de seguir silenciosamente com universo incompleto.
+    """
     tickers_str = " ".join(TICKERS_YAHOO.values())
 
-    log.info("Baixando %d ativos do Yahoo Finance...", len(TICKERS_YAHOO))
+    log.info("Baixando %d ativos do Yahoo Finance (batch)...", len(TICKERS_YAHOO))
     raw = yf.download(
         tickers=tickers_str,
         start=DATA_INICIO.date(),
@@ -45,15 +79,33 @@ def coletar_todos_pares() -> pd.DataFrame:
     ticker_inverso = {v: k for k, v in TICKERS_YAHOO.items()}
     close = close.rename(columns=ticker_inverso)
 
-    # Remove colunas completamente vazias (ticker não encontrado no Yahoo)
-    antes = set(close.columns)
+    # Remove colunas completamente vazias e identifica faltantes
     close = close.dropna(axis=1, how="all")
-    ausentes = antes - set(close.columns)
-    if ausentes:
-        log.warning("Sem dados no Yahoo Finance para: %s", ausentes)
+    esperados = set(TICKERS_YAHOO.keys())
+    faltantes = esperados - set(close.columns)
+
+    if faltantes:
+        log.warning(
+            "Batch trouxe %d/%d ativos. Refazendo individualmente: %s",
+            len(close.columns), len(esperados), sorted(faltantes),
+        )
+        for tk_curto in sorted(faltantes):
+            yahoo_t = TICKERS_YAHOO[tk_curto]
+            serie = _baixar_ticker_individual(yahoo_t)
+            if serie is not None and not serie.empty:
+                close[tk_curto] = serie
+                log.info("Resgate OK: %s (%d obs)", tk_curto, len(serie))
+
+    # Recheca faltantes após o resgate
+    faltantes_final = esperados - set(close.columns)
+    if faltantes_final:
+        raise RuntimeError(
+            f"Falha ao coletar {len(faltantes_final)} ativo(s) após retries: "
+            f"{sorted(faltantes_final)}. Verifique conexão/cache yfinance."
+        )
 
     close = close.sort_index()
-    log.info("Coleta finalizada: %d dias x %d ativos", close.shape[0], close.shape[1])
+    log.info("Coleta finalizada: %d dias x %d ativos (universo completo)", close.shape[0], close.shape[1])
     return close
 
 

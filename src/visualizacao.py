@@ -28,10 +28,6 @@ DPI_SAVE = 300
 sns.set_theme(style="whitegrid", palette="tab10")
 
 
-# ────────────────────────────────────────────────────────────
-# Helpers internos
-# ────────────────────────────────────────────────────────────
-
 def _salvar(fig: plt.Figure, caminho: Path | None) -> None:
     if caminho is not None:
         caminho.parent.mkdir(parents=True, exist_ok=True)
@@ -44,10 +40,6 @@ def _drawdown_serie(retornos: pd.Series) -> pd.Series:
     pico = cum.cummax()
     return (cum - pico) / pico
 
-
-# ────────────────────────────────────────────────────────────
-# 1. Equity Curves
-# ────────────────────────────────────────────────────────────
 
 def plotar_equity_curves(
     resultados: dict[str, ResultadoBacktest],
@@ -86,10 +78,6 @@ def plotar_equity_curves(
     return fig
 
 
-# ────────────────────────────────────────────────────────────
-# 2. Drawdowns
-# ────────────────────────────────────────────────────────────
-
 def plotar_drawdowns(
     resultados: dict[str, ResultadoBacktest],
     titulo: str = "Drawdown — Comparativo de Estratégias",
@@ -125,10 +113,6 @@ def plotar_drawdowns(
     _salvar(fig, salvar_em)
     return fig
 
-
-# ────────────────────────────────────────────────────────────
-# 3. Rolling Sharpe
-# ────────────────────────────────────────────────────────────
 
 def plotar_rolling_sharpe(
     resultados: dict[str, ResultadoBacktest],
@@ -167,10 +151,6 @@ def plotar_rolling_sharpe(
     _salvar(fig, salvar_em)
     return fig
 
-
-# ────────────────────────────────────────────────────────────
-# 4. Heatmap de pesos
-# ────────────────────────────────────────────────────────────
 
 def plotar_heatmap_pesos(
     resultado: ResultadoBacktest,
@@ -224,10 +204,6 @@ def plotar_heatmap_pesos(
     return fig
 
 
-# ────────────────────────────────────────────────────────────
-# 5. Distribuição de retornos
-# ────────────────────────────────────────────────────────────
-
 def plotar_distribuicao_retornos(
     resultados: dict[str, ResultadoBacktest],
     titulo: str = "Distribuição dos Retornos Diários",
@@ -262,10 +238,6 @@ def plotar_distribuicao_retornos(
     return fig
 
 
-# ────────────────────────────────────────────────────────────
-# 6. Tabela de métricas
-# ────────────────────────────────────────────────────────────
-
 def tabela_metricas(
     resultados: dict[str, ResultadoBacktest],
     cdi_diario: pd.Series | None = None,
@@ -286,10 +258,6 @@ def tabela_metricas(
     df = pd.DataFrame(dados)
     return df
 
-
-# ────────────────────────────────────────────────────────────
-# 7. Figura 3×1: equity, drawdown, vol rolante
-# ────────────────────────────────────────────────────────────
 
 def plotar_backtest_completo_3x1(
     resultado_var: ResultadoBacktest,
